@@ -311,6 +311,12 @@ heissen Pfaden (`dispatch_fork` → Heap + `#[inline(never)]`). Lazy-Guards (Roo
 **Nächstes:** WASM-Engine 2a.
 
 **ARM-Trio + pdfreeze (2026-09-11):** Doppelvergabe im PD-Cspace-Pool gefunden und
-behebt (Fix uncommittet in `crates/caprock-microkit`, s. AGENTS.md 19): PD 0/1 teilten
-Run `[32..48)` — stale Freilisten-Glied bei Slot-Wiederverwendung. Belegt: cspace-Host
-13/13, aarch64-Suite `ALL PASS`, x86-Suite (512M) `ALL PASS`.
+behebt (committet `765d662`, s. AGENTS.md 19): PD 0/1 teilten Run `[32..48)` — stale
+Freilisten-Glied bei Slot-Wiederverwendung. Belegt: cspace-Host 13/13,
+aarch64-Suite `ALL PASS`, x86-Suite (512M) `ALL PASS`.
+
+**Rewrite-Vorfeld (2026-09-11, AGENTS.md 20):** Builds rc=0, cspace 13/13. QEMU-Rot ist
+lastkorreliert begründet (kein Fix-Effekt): ARM-Gast grün, Skript rot nur via
+`dbg`-Worst-Case (259k/388k grün vs. 700k rot, IDENTISCHES Binary, Load 5–6);
+x86 `sperre` 1,6 Mrd. Zyklen (Host-Deschedule) → Watchdog → verif/sweep Folge.
+Empfehlung: `tools/abnahme.sh` auf idler Maschine.
