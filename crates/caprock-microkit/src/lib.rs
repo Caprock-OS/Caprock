@@ -1003,15 +1003,22 @@ impl PdTable {
             });
         }
         let i = self.freien_slot_suchen().ok_or(CspaceAbweisung::KeinePdFrei)?;
+        // Wiederbelebter Slot zuerst entketten (Doppelvergabe-Schutz, s. `Vergabe::entketten`):
+        // ein stehengebliebenes Glied beschriebe den neuen Lauf als frei. Passt der geloeste
+        // Lauf, wird er weiterverwendet (kein Leck, kein Bump-Verbrauch).
+        let alt = self.cspace_vergabe.entketten(&mut self.pds, i);
         // 4. Der Pool — die autoritative Stelle ist die Vergabe (sie kennt die Freiliste).
         let pool_len = self.cspace_pool.len().min(u32::MAX as usize) as u32;
-        let (start, len) = match self.cspace_vergabe.belegen(&mut self.pds, pool_len, anf.plaetze)
-        {
-            Ok(lauf) => lauf,
-            Err(e) => {
-                self.cspace_abgewiesen = self.cspace_abgewiesen.saturating_add(1);
-                return Err(e);
-            }
+        let (start, len) = match alt {
+            Some(a) if a.len >= anf.plaetze => (a.start, a.len),
+            _ => match self.cspace_vergabe.belegen(&mut self.pds, pool_len, anf.plaetze)
+            {
+                Ok(lauf) => lauf,
+                Err(e) => {
+                    self.cspace_abgewiesen = self.cspace_abgewiesen.saturating_add(1);
+                    return Err(e);
+                }
+            },
         };
         let epoch = self.pds[i].epoch;
         self.pds[i] = Pd {
@@ -1318,16 +1325,22 @@ impl PdTable {
             return None;
         }
         let i = self.freien_slot_suchen()?;
+        // Wie im Standard-Create: wiederbelebten Slot zuerst entketten
+        // (Doppelvergabe-Schutz, s. `Vergabe::entketten`).
+        let alt = self.cspace_vergabe.entketten(&mut self.pds, i);
         // Der Cspace-Lauf kommt aus dem Pool wie bei jeder anderen PD (Standardgroesse):
         // ohne ihn haette das Backend null Plaetze und hielte keine einzige Cap. Der
         // Budget-Vorrat wird dabei **nicht** gebucht — das ist die uebernommene Eigenheit
         // dieses Pfades (er buchte nie), keine neue: wer sie behebt, verschiebt die
         // Vorratszahlen im Bericht und fasst damit die Abnahme an.
         let pool_len = self.cspace_pool.len().min(u32::MAX as usize) as u32;
-        let (start, len) = self
-            .cspace_vergabe
-            .belegen(&mut self.pds, pool_len, NCAPS as u32)
-            .ok()?;
+        let (start, len) = match alt {
+            Some(a) if a.len >= NCAPS as u32 => (a.start, a.len),
+            _ => self
+                .cspace_vergabe
+                .belegen(&mut self.pds, pool_len, NCAPS as u32)
+                .ok()?,
+        };
         let epoch = self.pds[i].epoch;
         self.pds[i] = Pd {
             used: true,

@@ -286,7 +286,7 @@ grün ist; das ist ein Argument, kein Beleg.
 
 ## Linux-Compat (opencode)
 
-**Zuletzt geändert: 2026-09-10**
+**Zuletzt geändert: 2026-09-11**
 
 **Stand:** S0 **46/46** + `lx_messen` grün. Syscalls verdrahtet: `SYS_PARK_TIMEOUT`(29),
 `SYS_CALL_TIMEOUT`(30), `SYS_FORK`(31), `SYS_EXEC`(32), `SYS_DEBUG`-v2 (33–35),
@@ -309,3 +309,8 @@ Vektor-Tests + Interop-Anker); fremde `...2325`-Stellen benannt (`caprock-lxpd`,
 heissen Pfaden (`dispatch_fork` → Heap + `#[inline(never)]`). Lazy-Guards (Root-Fix).
 
 **Nächstes:** WASM-Engine 2a.
+
+**ARM-Trio + pdfreeze (2026-09-11):** Doppelvergabe im PD-Cspace-Pool gefunden und
+behebt (Fix uncommittet in `crates/caprock-microkit`, s. AGENTS.md 19): PD 0/1 teilten
+Run `[32..48)` — stale Freilisten-Glied bei Slot-Wiederverwendung. Belegt: cspace-Host
+13/13, aarch64-Suite `ALL PASS`, x86-Suite (512M) `ALL PASS`.

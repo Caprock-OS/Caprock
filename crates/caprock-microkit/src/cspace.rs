@@ -296,6 +296,61 @@ impl Vergabe {
         ablage.schreibe(idx, a);
         self.kopf = (idx as u32) + 1;
     }
+
+    /// Ein wiederbelebtes Kettenglied loesen — Doppelvergabe-Schutz bei Slot-Wiederverwendung.
+    ///
+    /// Der Anker lebt IM Tabelleneintrag: wird der Slot wiederverwendet, ohne sein
+    /// Kettenglied zu entfernen, beschreibt das stehengebliebene Glied den NEUEN Lauf
+    /// als frei — die naechste Vergabe haendigt ihn ein zweites Mal aus (zwei PDs, ein
+    /// Lauf; gemessen 2026-09-11 auf ARM: PD 0/1 teilten `[32..48)`, ipc/reload rot,
+    /// Cap-Zaehlung beider PDs identisch). Wer einen Slot wiederbelebt (alle
+    /// `create`-Pfade), entkettet ihn ZUERST und verwendet den geloesten Lauf weiter,
+    /// wenn er passt (kein Leck); ein zu kleiner gelooster Lauf verfällt (einheitliche
+    /// Groessen lassen das praktisch nie eintreten).
+    ///
+    /// Rueckgabe: der geloeste Anker (`None`, wenn `idx` nicht verkettet war). Schritt-
+    /// begrenzt (`anzahl + 1`): eine zyklische Kette haelt hier an, statt zu haengen.
+    pub fn entketten(
+        &mut self,
+        ablage: &mut impl AnkerAblage,
+        idx: usize,
+    ) -> Option<CspaceAnker> {
+        if idx >= ablage.anzahl() {
+            return None;
+        }
+        let marke = idx as u32 + 1;
+        // Kopf-Glied: Kopf umhaengen, Anker neutralisieren (kein freier Lauf mehr).
+        if self.kopf == marke {
+            let mut a = ablage.lese(idx);
+            self.kopf = a.naechster;
+            a.naechster = 0;
+            ablage.schreibe(idx, a);
+            return Some(a);
+        }
+        // Vorgaenger suchen — schrittbegrenzt, fail-closed bei Kettenbruch.
+        let schranke = ablage.anzahl().saturating_add(1);
+        let mut i = self.kopf;
+        let mut schritte = 0usize;
+        while i != 0 && schritte < schranke {
+            schritte += 1;
+            let pi = (i - 1) as usize;
+            if pi >= ablage.anzahl() {
+                return None;
+            }
+            if ablage.lese(pi).naechster == marke {
+                let ziel = ablage.lese(idx).naechster;
+                let mut v = ablage.lese(pi);
+                v.naechster = ziel;
+                ablage.schreibe(pi, v);
+                let mut a = ablage.lese(idx);
+                a.naechster = 0;
+                ablage.schreibe(idx, a);
+                return Some(a);
+            }
+            i = ablage.lese(pi).naechster;
+        }
+        None
+    }
 }
 
 #[cfg(test)]
@@ -479,5 +534,111 @@ mod tests {
         let (s, l) = v.belegen(&mut ablage, 48, 0).unwrap();
         assert_eq!((s, l), (0, 0));
         assert_eq!(v.bump_stand(), 0);
+    }
+
+    #[test]
+    fn entketten_verhindert_doppelvergabe() {
+        // Der ARM-Trio-Befund vom 2026-09-11 als Test: Slot 0 freigegeben (8er-Lauf),
+        // wiederbelebt mit frischem 16er-Lauf vom Bump (das 8er-Glied passte nicht) —
+        // ohne Entketten haendigte die naechste 16er-Vergabe [24,40) ein ZWEITES Mal
+        // aus (PD 0/1 teilten den Lauf, ipc/reload rot). Mit Entketten kommt sie
+        // frisch vom Bump, und der alte Lauf geht genau einmal raus.
+        let mut ablage = TestAblage::neu(4);
+        let mut v = Vergabe::neu();
+        let (s0, l0) = v.belegen(&mut ablage, 128, 8).unwrap();
+        assert_eq!((s0, l0), (0, 8));
+        ablage.schreibe(0, CspaceAnker {
+            start: s0,
+            len: l0,
+            naechster: 0,
+        });
+        let (s1, l1) = v.belegen(&mut ablage, 128, 16).unwrap();
+        assert_eq!((s1, l1), (8, 16));
+        ablage.schreibe(1, CspaceAnker {
+            start: s1,
+            len: l1,
+            naechster: 0,
+        });
+        // Slot 0 freigeben, dann wiederbeleben (create-Pfad: entketten zuerst).
+        v.freigeben(&mut ablage, 0);
+        let alt = v.entketten(&mut ablage, 0).expect("verketteter Slot");
+        assert_eq!((alt.start, alt.len), (0, 8));
+        // Zu klein fuer 16: frisch vom Bump — NICHT der alte Lauf.
+        let (s2, l2) = v.belegen(&mut ablage, 128, 16).unwrap();
+        assert_eq!((s2, l2), (24, 16));
+        // Neubelegung beschreibt Eintrag 0 neu (wie create) ...
+        ablage.schreibe(0, CspaceAnker {
+            start: s2,
+            len: l2,
+            naechster: 0,
+        });
+        // ... und die naechste Vergabe teilt ihn NICHT ein zweites Mal aus.
+        let (s3, _) = v.belegen(&mut ablage, 128, 16).unwrap();
+        assert_eq!(s3, 40);
+    }
+
+    #[test]
+    fn entketten_gibt_passenden_lauf_zurueck() {
+        // Passt der geloeste Lauf, verwendet create ihn weiter (kein Leck, kein
+        // Bump-Verbrauch) — und die Kette bleibt leer dahinter.
+        let mut ablage = TestAblage::neu(4);
+        let mut v = Vergabe::neu();
+        let (s0, l0) = v.belegen(&mut ablage, 128, 16).unwrap();
+        ablage.schreibe(0, CspaceAnker {
+            start: s0,
+            len: l0,
+            naechster: 0,
+        });
+        v.freigeben(&mut ablage, 0);
+        let alt = v.entketten(&mut ablage, 0).expect("verketteter Slot");
+        assert!(alt.len >= 16);
+        assert_eq!((alt.start, alt.len), (0, 16));
+        // Kette leer: die naechste Vergabe kommt vom Bump, nicht aus der Liste.
+        let (s, _) = v.belegen(&mut ablage, 128, 16).unwrap();
+        assert_eq!(s, 16);
+    }
+
+    #[test]
+    fn ohne_entketten_teilt_vergabe_doppelt_aus() {
+        // Der alte Pfad als Negativbeleg (laeuft auf altem wie neuem Code — er benutzt
+        // nur belegen/freigeben): Slot 0 freigegeben, wiederbelebt OHNE Entketten.
+        // Das stehengebliebene Glied beschreibt den neuen Lauf als frei und teilt ihn
+        // ein zweites Mal aus. Genau deshalb muessen alle create-Pfade entketten.
+        let mut ablage = TestAblage::neu(4);
+        let mut v = Vergabe::neu();
+        let (s0, l0) = v.belegen(&mut ablage, 128, 8).unwrap();
+        ablage.schreibe(0, CspaceAnker {
+            start: s0,
+            len: l0,
+            naechster: 0,
+        });
+        let (s1, l1) = v.belegen(&mut ablage, 128, 16).unwrap();
+        ablage.schreibe(1, CspaceAnker {
+            start: s1,
+            len: l1,
+            naechster: 0,
+        });
+        v.freigeben(&mut ablage, 0);
+        // Wiederbelebung OHNE Entketten: frischer Lauf vom Bump ...
+        let (s2, l2) = v.belegen(&mut ablage, 128, 16).unwrap();
+        assert_eq!((s2, l2), (24, 16));
+        ablage.schreibe(0, CspaceAnker {
+            start: s2,
+            len: l2,
+            naechster: 0,
+        });
+        // ... und derselbe Lauf geht ein zweites Mal raus (Doppelvergabe).
+        let (s3, _) = v.belegen(&mut ablage, 128, 16).unwrap();
+        assert_eq!(s3, 24);
+    }
+
+    #[test]
+    fn entketten_ohne_kette_ist_none() {
+        // Nie verketteter Slot: nichts zu loesen, nichts veraendert.
+        let mut ablage = TestAblage::neu(4);
+        let mut v = Vergabe::neu();
+        v.belegen(&mut ablage, 128, 16).unwrap();
+        assert!(v.entketten(&mut ablage, 0).is_none());
+        assert!(v.entketten(&mut ablage, 9).is_none());
     }
 }

@@ -202,6 +202,26 @@ gerade unter ihm liegt.
 
 *Neueste oben. Format: Datum · Absender · Sache.*
 
+## 19 · 2026-09-11 · opencode (Linux-Compat) an alle · ARM-Trio + pdfreeze: Doppelvergabe im PD-Cspace-Pool (Fix liegt uncommittet in microkit)
+
+Fremde Dateien, deshalb hier (Cspace-Strang bitte reviewen): `crates/caprock-microkit/src/cspace.rs`
+(`Vergabe::entketten` neu + 4 Tests) und `crates/caprock-microkit/src/lib.rs` (beide create-Pfade
+entketten zuerst). Sonst nichts angefasst — DIAGs sind revertiert, `threads/mod.rs` ist sauber.
+
+Befund: PD 0 und PD 1 teilten Run `[32..48)` (DIAG-Runs-Snapshot). Mechanismus: ein freigegebener
+PD-Slot bleibt in der Freikette verkettet (`freilauf_next` lebt im Eintrag); wird der Slot
+wiederverwendet, ohne das Glied zu entfernen, beschreibt es den NEUEN Lauf als frei — die nächste
+Vergabe händigt ihn doppelt aus. Folge: `recv` (READ) überschrieb `send` (WRITE) in derselben
+Poolzelle → Batch-1 `ERR_RIGHTS` (2×), nach Reload-Clear Batch-2 `ERR_BADCAP`, Report-Slot-0
+`Debuggable{74}`, Cap-Zählung beider PDs identisch (7/7), pdfreeze `beziehung-intern=false`.
+x86 traf es nicht (andere Churn-Reihenfolge durch die Quiesce-PDs) — latent war es dort auch.
+
+Belegt: Host `tools/host-tests.sh cspace` 13/13 (3 neu + 1 Negativbeleg ohne Entketten);
+aarch64-Suite `== ALL PASS ==` (Fix allein, ohne DIAG: `build/diag/trio-fix-clean.log`);
+x86-Suite 512M `== ALL PASS ==` (`build/diag/trio-fix-x86.log`). Vor dem Commit bitte
+`git checkout -- kernel/src/trusted_keys.rs kernel/src/manifest_keys.rs` prüfen (Suite
+regeneriert sie; hier waren sie unverändert).
+
 ## 18 · 2026-09-10 · opencode (Linux-Compat) an alle · ARM-Parität + tests/services wiederhergestellt
 
 Simon: alle x86-Features (inkl. Dichte: 10000 PDs) auch auf ARM. 4 Stränge (P1-P4),
