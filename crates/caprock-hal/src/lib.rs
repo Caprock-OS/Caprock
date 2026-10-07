@@ -85,7 +85,7 @@ pub use imp::{cache, console, cpu, exception, fp, intc, mmu, power, syscall, tim
 
 // ARM-/QEMU-`virt`-spezifische Geräte (noch ohne x86-Entsprechung, s. Modul-Doku).
 #[cfg(target_arch = "aarch64")]
-pub use imp::{gic, iommu, pcie, psci, smmu};
+pub use imp::{gic, gicv3, iommu, pcie, psci, smmu};
 
 // x86-spezifisch: Segmentierung existiert auf ARM nicht (dort gibt es keine GDT/TSS).
 #[cfg(target_arch = "x86_64")]

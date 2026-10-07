@@ -6,7 +6,7 @@
 //!
 //! `unsafe` nur für Timer-Systemregisterzugriffe — erlaubte Domäne.
 
-use super::{cpu, gic};
+use super::{cpu, intc};
 use core::arch::asm;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -50,7 +50,7 @@ fn set_ctl(val: u64) {
 pub fn init(hz: u64) {
     let interval = freq() / hz;
     INTERVAL.store(interval, Ordering::Relaxed);
-    gic::enable_intid(TIMER_INTID);
+    intc::enable_intid(TIMER_INTID);
     set_tval(interval);
     set_ctl(CTL_ENABLE);
 }

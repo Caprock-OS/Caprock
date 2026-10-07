@@ -12,6 +12,8 @@ pub mod cpu;
 pub mod exception;
 pub mod fp;
 pub mod gic;
+pub mod gicv3;
+pub mod intc;
 pub mod iommu;
 pub mod mmu;
 pub mod pcie;
@@ -20,7 +22,5 @@ pub mod smmu;
 pub mod syscall;
 pub mod timer;
 
-/// Arch-neutraler Name des Interrupt-Controllers (hier: GICv2).
-pub use gic as intc;
 /// Arch-neutraler Name der Power-/SMP-Schnittstelle (hier: PSCI).
 pub use psci as power;

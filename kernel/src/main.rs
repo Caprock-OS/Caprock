@@ -231,7 +231,7 @@ pub extern "C" fn kernel_main(dtb_addr: u64) -> ! {
     // Distributor global + Init des Primärkerns (core 0).
     hal::intc::init_dist();
     init_core_irqs();
-    println!("core 0  : online (vectors, gic, timer @ {} Hz)", TICK_HZ);
+    println!("core 0  : online (vectors, gicv{}, timer @ {} Hz)", hal::intc::version(), TICK_HZ);
     println!("timer   : CNTFRQ={} Hz, PPI {}", hal::timer::freq(), hal::timer::TIMER_INTID);
 
     // Spekulations-Eigenschaften der HW melden (ext-29). CSV2/CSV3 sagen, ob die HW von sich

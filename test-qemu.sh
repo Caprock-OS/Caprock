@@ -205,7 +205,7 @@ BOOT_TIMEOUTS=0
 boot_once() {
     local LOG="$1"
     timeout --signal=KILL "$SECONDS_RUN" qemu-system-aarch64 \
-        -machine virt,iommu=smmuv3 -cpu cortex-a72 -smp "$CORES" -m 4G \
+        -machine virt,iommu=smmuv3,gic-version="${GIC_VERSION:-2}" -cpu cortex-a72 -smp "$CORES" -m 4G \
         -nographic -serial "file:$LOG" -no-reboot \
         -net none -device pcie-root-port,id=rp0,chassis=1 -device virtio-rng-pci,bus=rp0,iommu_platform=on \
         -device loader,file=build/boot-archive.bin,addr=0x13F000000 \
