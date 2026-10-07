@@ -23,7 +23,7 @@ LOG="${LOG:-build/diag/uefi-boot.log}"
 
 ARCHIVE_ONLY=1 ./test-qemu.sh >/dev/null 2>&1 || { echo "KERNEL/ARCHIVE BUILD FAILED (ARCHIVE_ONLY=1 ./test-qemu.sh)"; exit 1; }
 [ -f build/boot-archive.bin ] || { echo "MISSING build/boot-archive.bin"; exit 2; }
-( cd boot/uefi-aarch64 && cargo +nightly build --release ) >/dev/null 2>&1 || { echo "STUB BUILD FAILED"; exit 1; }
+( cd boot/uefi-aarch64 && cargo +nightly build -j14 --release ) >/dev/null 2>&1 || { echo "STUB BUILD FAILED"; exit 1; }
 
 rm -rf "$ESP"; mkdir -p "$ESP/EFI/BOOT" build/diag
 cp "$STUB" "$ESP/EFI/BOOT/BOOTAA64.EFI"
