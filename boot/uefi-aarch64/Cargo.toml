@@ -1,0 +1,11 @@
+[package]
+name = "caprock-uefi-stub"
+version = "0.0.1"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+[workspace]
+
+[dependencies]
+uefi = { version = "0.35", features = ["alloc", "global_allocator", "panic_handler"] }
+caprock-handover = { path = "../../crates/caprock-handover" }

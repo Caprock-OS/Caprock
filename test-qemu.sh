@@ -173,6 +173,10 @@ python3 tools/mkarchive.py build/boot-archive.bin --system-manifest build/system
     24:aggressor-t:0:1:"$TBIN/aggressor-t.elf"::certs/aggressor-t.cert 25:intruder-t:0:1:"$TBIN/intruder-t.elf" \
     >/dev/null 2>&1 || { echo "ARCHIVE BUILD FAILED"; exit 1; }
 
+# Opt-in for test-qemu-uefi.sh: stop once kernel ELF, signed manifest and boot archive exist, so the
+# UEFI test boots the very same artifacts (the manifest is bound to this exact kernel image).
+[ -n "${ARCHIVE_ONLY:-}" ] && { echo "== archive ready (ARCHIVE_ONLY) =="; exit 0; }
+
 echo "== boot ($SECONDS_RUN s) =="
 # ext-23: SMMUv3 (IOMMU) + virtio-rng-pci HINTER einem pcie-root-port (StreamID = PCI-RID).
 # QEMUs SMMUv3 uebersetzt nur Endpunkte hinter einem Root-Port (integrierte Bus-0-Endpunkte

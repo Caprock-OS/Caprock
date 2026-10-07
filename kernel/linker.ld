@@ -25,6 +25,7 @@ SECTIONS {
     .text : ALIGN(4096) {
         __text_start = .;
         KEEP(*(.text.boot))   /* _start must lead the image */
+        KEEP(*(.text.boot_uefi)) /* _start_uefi: UEFI-stub entry, see arch/aarch64/boot.rs */
         *(.text .text.*)
         . = ALIGN(4096);
         __text_end = .;

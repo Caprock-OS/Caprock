@@ -28,6 +28,7 @@ members = [
     "crates/caprock-wait",
     "crates/caprock-log",
     "crates/caprock-lxpd",
+    "crates/caprock-handover",
 ]
 
 [workspace.package]

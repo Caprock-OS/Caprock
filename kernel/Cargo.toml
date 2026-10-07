@@ -130,3 +130,4 @@ caprock-microkit = { path = "../crates/caprock-microkit" }
 # Device-Tree gibt es nur auf der ARM-Plattform (x86 nutzt Multiboot/ACPI).
 [target.'cfg(target_arch = "aarch64")'.dependencies]
 caprock-dtb = { path = "../crates/caprock-dtb" }
+caprock-handover = { path = "../crates/caprock-handover" }

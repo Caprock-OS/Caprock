@@ -33,6 +33,8 @@ static GLOBAL: NoGlobalHeap = NoGlobalHeap;
 /// Zwei Adressachsen (physisch / IOVA) als getrennte Typen — s. Moduldoku.
 mod addr;
 mod arch;
+#[cfg(target_arch = "aarch64")]
+mod uefi_boot;
 mod panic;
 /// Seitenfarben / Cache-Partitionierung zwischen PDs (todo A1) — arch-neutral.
 mod colors;

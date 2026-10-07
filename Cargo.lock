@@ -45,6 +45,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "caprock-handover"
+version = "0.0.1"
+
+[[package]]
 name = "caprock-ipc"
 version = "0.0.1"
 dependencies = [
@@ -62,6 +66,7 @@ dependencies = [
  "caprock-dma",
  "caprock-dtb",
  "caprock-hal",
+ "caprock-handover",
  "caprock-ipc",
  "caprock-loader",
  "caprock-mem",

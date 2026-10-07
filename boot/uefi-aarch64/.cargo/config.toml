@@ -1,0 +1,5 @@
+# Separate workspace: PE32+ UEFI application for aarch64. `aarch64-unknown-uefi` is a tier-2 target
+# with a prebuilt core/alloc, so the parent's `build-std` is not needed (and must not apply).
+[build]
+target = "aarch64-unknown-uefi"
+target-dir = "build/target"
