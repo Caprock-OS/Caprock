@@ -15,14 +15,25 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 /// ECAM-Basis (Config-Space) auf QEMU `virt` (High-ECAM).
 pub const ECAM_BASE: u64 = 0x40_1000_0000;
-/// GiB-Index der ECAM-Region (für das globale Device-Mapping).
+/// GiB index of the QEMU `virt` ECAM region (default; see [`ecam_gib`]).
 pub const ECAM_GIB: usize = (ECAM_BASE / (1 << 30)) as usize; // 256
 
+/// ECAM base in use: the device tree's PCIe host, QEMU `virt` value as fallback.
+pub fn ecam_base() -> u64 {
+    super::platform::current().ecam.0
+}
+/// GiB index of the ECAM region in use (for the global device mapping).
+pub fn ecam_gib() -> usize {
+    (ecam_base() / (1 << 30)) as usize
+}
+fn mmio32_window() -> (u64, u64) {
+    super::platform::current().mmio32
+}
+
 /// 32-bit-MMIO-Fenster (BAR-Zuweisung).
-const MMIO32_BASE: u64 = 0x1000_0000;
-const MMIO32_END: u64 = 0x3eff_0000;
-/// Bump-Allokator über das 32-bit-MMIO-Fenster (BAR-Vergabe, monoton).
-static MMIO32_NEXT: AtomicU64 = AtomicU64::new(MMIO32_BASE);
+/// Bump allocator over the 32-bit MMIO window (BAR assignment, monotonic). 0 = not started; the
+/// first allocation starts at the window base from the platform description (QEMU: 0x1000_0000).
+static MMIO32_NEXT: AtomicU64 = AtomicU64::new(0);
 
 /// Red-Hat/virtio PCI-Vendor-ID.
 pub const VIRTIO_VENDOR: u16 = 0x1af4;
@@ -94,7 +105,7 @@ pub fn cfg_page(d: &PciDevice) -> u64 {
 }
 
 fn cfg_addr(bus: u8, dev: u8, func: u8, off: u16) -> u64 {
-    ECAM_BASE
+    ecam_base()
         + ((bus as u64) << 20)
         + ((dev as u64) << 15)
         + ((func as u64) << 12)
@@ -162,8 +173,8 @@ fn configure_bridges() {
         cfg_write8(0, dev, 0, CFG_SECONDARY_BUS, sec);
         cfg_write8(0, dev, 0, CFG_SUBORDINATE_BUS, sec);
         // Memory-Window auf das 32-bit-MMIO-Fenster (Einheiten: 1 MiB, Bits[15:4]=Addr[31:20]).
-        cfg_write16(0, dev, 0, CFG_MEM_BASE, ((MMIO32_BASE >> 16) & 0xfff0) as u16);
-        cfg_write16(0, dev, 0, CFG_MEM_LIMIT, ((MMIO32_END >> 16) & 0xfff0) as u16);
+        cfg_write16(0, dev, 0, CFG_MEM_BASE, ((mmio32_window().0 >> 16) & 0xfff0) as u16);
+        cfg_write16(0, dev, 0, CFG_MEM_LIMIT, ((mmio32_window().1 >> 16) & 0xfff0) as u16);
         // Prefetchable + I/O deaktivieren (Base > Limit).
         cfg_write16(0, dev, 0, CFG_PREF_BASE, 0xfff0);
         cfg_write16(0, dev, 0, CFG_PREF_LIMIT, 0x0000);
@@ -257,10 +268,14 @@ fn assign_bars(d: &mut PciDevice) {
         // Im 32-bit-Fenster, größen-ausgerichtet, vergeben.
         let base = {
             let align = size.max(0x1000);
+            let (win_base, win_end) = mmio32_window();
             let mut cur = MMIO32_NEXT.load(Ordering::Relaxed);
+            if cur == 0 {
+                cur = win_base;
+            }
             cur = (cur + align - 1) & !(align - 1);
             let next = cur + size;
-            if next > MMIO32_END {
+            if next > win_end {
                 i += if is_64 { 2 } else { 1 };
                 continue; // Fenster erschöpft
             }

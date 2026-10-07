@@ -31,3 +31,4 @@ kein-df-ist = []
 caprock-virtio = { path = "../caprock-virtio" }
 caprock-sync = { path = "../caprock-sync" }
 caprock-abi = { path = "../caprock-abi" }
+caprock-dtb = { path = "../caprock-dtb" }

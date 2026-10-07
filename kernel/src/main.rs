@@ -207,6 +207,12 @@ pub extern "C" fn kernel_main(dtb_addr: u64) -> ! {
     // MMU + Caches zuerst: danach sind Atomics/der Konsolen-Lock wohldefiniert.
     hal::mmu::init_primary();
 
+    // Platform description from the device tree (QEMU `virt` constants are the per-field
+    // fallback, so QEMU behaviour is unchanged). Done right after the MMU is up: the parser reads
+    // the blob with word-sized loads, which need Normal memory. The pre-MMU boot line above
+    // therefore still uses the default UART base.
+    hal::platform::install(hal::platform::Platform::from_dtb(DTB_BYTES));
+
     // F3 (Hygiene): Bring-up-Meldung, kein Testbericht -- nur im Pruefbau sichtbar, sonst
     // still. Es gibt kein eigenes `boot-verbose`-Feature (kernel/Cargo.toml ist fremder Besitz),
     // also traegt `selftest` das Gatter. Keine Logikaenderung: reiner Register-Read + Ausgabe.
@@ -232,7 +238,7 @@ pub extern "C" fn kernel_main(dtb_addr: u64) -> ! {
     hal::intc::init_dist();
     init_core_irqs();
     println!("core 0  : online (vectors, gic, timer @ {} Hz)", TICK_HZ);
-    println!("timer   : CNTFRQ={} Hz, PPI {}", hal::timer::freq(), hal::timer::TIMER_INTID);
+    println!("timer   : CNTFRQ={} Hz, PPI {}", hal::timer::freq(), hal::timer::intid());
 
     // Spekulations-Eigenschaften der HW melden (ext-29). CSV2/CSV3 sagen, ob die HW von sich
     // aus gegen Spectre-v2 (Branch-Predictor über Kontexte) bzw. Meltdown immun ist; der Kernel
@@ -270,6 +276,21 @@ pub extern "C" fn kernel_main(dtb_addr: u64) -> ! {
     println!("dtb     : {cores} CPUs (aus Device Tree; Kernel-Obergrenze {})", caprock_sched::MAX_CORES);
     let dtb_ok = ram_base == RAM_BASE && ram_size == 4 * 1024 * 1024 * 1024 && cores > 0;
     println!("dtb     : {}", if dtb_ok { "ALL PASS" } else { "FAILURES" });
+    {
+        let pf = hal::platform::current();
+        let d = hal::platform::Platform::QEMU_VIRT;
+        let same = pf.uart_base == d.uart_base
+            && pf.gicd_base == d.gicd_base
+            && pf.gicc_base == d.gicc_base
+            && pf.timer_intid == d.timer_intid
+            && pf.ecam == d.ecam
+            && pf.mmio32 == d.mmio32;
+        println!(
+            "platform: sections={:#x} uart={:#x} gicd={:#x} gicc={:#x} ecam={:#x} timer-intid={} virtio-mmio={} (QEMU-defaults-identical={})",
+            pf.from_dtb_mask, pf.uart_base, pf.gicd_base, pf.gicc_base, pf.ecam.0, pf.timer_intid,
+            pf.virtio_mmio_count, same
+        );
+    }
 
     // Phase 2/3: capability-basiertes Speichermodell + Capability-Space.
     // User-RAM erst ab 2 MiB: die ersten 2 MiB sind die geteilte Kernel-L3 (von

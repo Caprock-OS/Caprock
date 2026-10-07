@@ -416,7 +416,7 @@ pub extern "C" fn handle_exception(frame: *mut TrapFrame, kind: u64) -> *mut Tra
     if is_irq(kind) {
         let intid = super::gic::handle_irq();
         // Timer-Tick oder Cross-Core-Reschedule-IPI -> neu einplanen.
-        if intid == Some(crate::timer::TIMER_INTID)
+        if intid == Some(crate::timer::intid())
             || intid == Some(super::gic::IPI_RESCHED_INTID)
         {
             return reschedule(frame);

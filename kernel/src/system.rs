@@ -11555,9 +11555,9 @@ mod pcie_arm {
         // an der eine PD etwas zu sehen bekaeme.
         let _ = crate::addr::Va::for_kernel_global_window(
             KernelGlobalWindowWitness(()),
-            crate::addr::Pa::new((hal::pcie::ECAM_GIB as u64) << 30),
+            crate::addr::Pa::new((hal::pcie::ecam_gib() as u64) << 30),
         );
-        hal::mmu::map_device_block_global(hal::pcie::ECAM_GIB);
+        hal::mmu::map_device_block_global(hal::pcie::ecam_gib());
         // Gezielt die virtio-RNG (nicht eine evtl. vorhandene Default-NIC, ebenfalls Vendor 0x1af4).
         let d = hal::pcie::find(hal::pcie::VIRTIO_VENDOR, &hal::pcie::VIRTIO_RNG_DEVICES);
         *VIRTIO_PCI.lock() = d; // für D4 (virtio-Treiber) cachen

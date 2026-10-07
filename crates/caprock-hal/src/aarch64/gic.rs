@@ -12,8 +12,9 @@
 
 use core::ptr::{read_volatile, write_volatile};
 
-const GICD_BASE: usize = 0x0800_0000;
-const GICC_BASE: usize = 0x0801_0000;
+// Bases come from the platform description (device tree; QEMU `virt` values as fallback).
+// Range accessors for a GICv3 module live in `platform` (`gic_redistributors`, `gic_version`).
+use super::platform::{gicc_base, gicd_base};
 
 const GICD_CTLR: usize = 0x000;
 const GICD_ISENABLER: usize = 0x100; // write-1-to-set, je Bit ein INTID (freigeben)
@@ -34,15 +35,15 @@ const SPURIOUS: u32 = 1023;
 
 fn gicd_write(off: usize, val: u32) {
     // SAFETY: feste MMIO-Adresse des GIC-Distributors (Device-Memory).
-    unsafe { write_volatile((GICD_BASE + off) as *mut u32, val) }
+    unsafe { write_volatile((gicd_base() + off) as *mut u32, val) }
 }
 fn gicc_write(off: usize, val: u32) {
     // SAFETY: feste MMIO-Adresse des GIC-CPU-Interface (Device-Memory).
-    unsafe { write_volatile((GICC_BASE + off) as *mut u32, val) }
+    unsafe { write_volatile((gicc_base() + off) as *mut u32, val) }
 }
 fn gicc_read(off: usize) -> u32 {
     // SAFETY: feste MMIO-Adresse des GIC-CPU-Interface (Device-Memory).
-    unsafe { read_volatile((GICC_BASE + off) as *const u32) }
+    unsafe { read_volatile((gicc_base() + off) as *const u32) }
 }
 
 /// Distributor global aktivieren. Einmalig (Primärkern).
@@ -85,7 +86,7 @@ pub fn route_spi(intid: u32, target_core: usize) {
     let off = GICD_ITARGETSR + intid as usize; // Byte-Offset = INTID
     // SAFETY: feste MMIO-Adresse des GIC-Distributors (Device-Memory), Byte-Zugriff.
     unsafe {
-        core::ptr::write_volatile((GICD_BASE + off) as *mut u8, 1u8 << (target_core & 0x7));
+        core::ptr::write_volatile((gicd_base() + off) as *mut u8, 1u8 << (target_core & 0x7));
     }
 }
 
@@ -106,7 +107,7 @@ pub fn handle_irq() -> Option<u32> {
     if intid == SPURIOUS {
         return None;
     }
-    if intid == crate::timer::TIMER_INTID {
+    if intid == crate::timer::intid() {
         crate::timer::on_irq();
     }
     // EOI mit vollständigem IAR-Wert (inkl. CPUID-Feld bei SGIs).

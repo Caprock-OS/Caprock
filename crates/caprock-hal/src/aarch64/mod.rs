@@ -15,6 +15,7 @@ pub mod gic;
 pub mod iommu;
 pub mod mmu;
 pub mod pcie;
+pub mod platform;
 pub mod psci;
 pub mod smmu;
 pub mod syscall;

@@ -10,8 +10,14 @@ use super::{cpu, gic};
 use core::arch::asm;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-/// PPI des nicht-sicheren EL1-Physical-Timers (QEMU `virt`).
+/// PPI of the non-secure EL1 physical timer on QEMU `virt` (the default; the INTID in use comes
+/// from [`intid`], i.e. the device tree with this value as the fallback).
 pub const TIMER_INTID: u32 = 30;
+
+/// INTID of the EL1 non-secure physical timer, from the platform description.
+pub fn intid() -> u32 {
+    super::platform::current().timer_intid
+}
 
 /// Compile-Zeit-Obergrenze der Kernzahl (nur diese Telemetrie-Tabelle; die tatsächliche
 /// Kernzahl ermittelt der Kernel beim Boot).
@@ -29,6 +35,10 @@ pub fn freq() -> u64 {
     let f: u64;
     // SAFETY: read-only Systemregister.
     unsafe { asm!("mrs {}, CNTFRQ_EL0", out(reg) f, options(nomem, nostack, preserves_flags)) }
+    // Some firmware leaves CNTFRQ_EL0 at 0; the device tree's `clock-frequency` is the fallback.
+    if f == 0 {
+        return super::platform::current().timer_freq_hint.unwrap_or(0) as u64;
+    }
     f
 }
 
@@ -50,7 +60,7 @@ fn set_ctl(val: u64) {
 pub fn init(hz: u64) {
     let interval = freq() / hz;
     INTERVAL.store(interval, Ordering::Relaxed);
-    gic::enable_intid(TIMER_INTID);
+    gic::enable_intid(intid());
     set_tval(interval);
     set_ctl(CTL_ENABLE);
 }

@@ -9,10 +9,12 @@
 //! * [`_print`] (über `println!`) — durch einen Spinlock SMP-serialisiert; erst
 //!   nach MMU-Aktivierung benutzen.
 
+use super::platform::{self, UartKind};
 use crate::konsole::{self, Schreibordnung};
 use core::fmt::{self, Write};
 
-/// MMIO-Basis der PL011-UART auf QEMU `virt`.
+/// MMIO base of the PL011 on QEMU `virt`. Kept as the documented default; the base actually
+/// used comes from [`super::platform`] (device tree, with exactly this value as the fallback).
 pub const PL011_BASE: usize = 0x0900_0000;
 const UART_FR: usize = 0x18;
 const UART_FR_TXFF: u32 = 1 << 5;
@@ -22,15 +24,21 @@ struct Pl011;
 
 impl Pl011 {
     fn put_byte(b: u8) {
-        // SAFETY: `PL011_BASE` ist die feste MMIO-Adresse der QEMU-`virt`-UART;
-        // volatile Zugriffe auf Geräteregister aliasen keinen Rust-Speicher.
-        // Geräteregisterzugriff ist eine erlaubte `unsafe`-Domäne.
+        // A console node of another UART model cannot be driven by this PL011 code; stay silent
+        // instead of spinning on a foreign register file.
+        if platform::uart_kind() != UartKind::Pl011 {
+            return;
+        }
+        let base = platform::uart_base();
+        // SAFETY: `base` is the PL011 MMIO address from the platform description (QEMU `virt`
+        // constant unless the device tree says otherwise); volatile accesses to device
+        // registers alias no Rust memory. Device register access is an allowed `unsafe` domain.
         unsafe {
-            let fr = (PL011_BASE + UART_FR) as *const u32;
+            let fr = (base + UART_FR) as *const u32;
             while core::ptr::read_volatile(fr) & UART_FR_TXFF != 0 {
                 core::hint::spin_loop();
             }
-            core::ptr::write_volatile(PL011_BASE as *mut u32, b as u32);
+            core::ptr::write_volatile(base as *mut u32, b as u32);
         }
     }
 
@@ -38,9 +46,13 @@ impl Pl011 {
     ///
     /// **Getrennt von [`Self::put_byte`], weil das Warten OHNE Maske laufen muss** (C9b).
     fn bereit() -> bool {
-        // SAFETY: feste MMIO-Adresse der QEMU-`virt`-UART, nur lesend (s. `put_byte`).
+        if platform::uart_kind() != UartKind::Pl011 {
+            return true; // nothing to wait for: `put_byte` drops the byte
+        }
+        let base = platform::uart_base();
+        // SAFETY: PL011 MMIO address from the platform description, read only (see `put_byte`).
         unsafe {
-            let fr = (PL011_BASE + UART_FR) as *const u32;
+            let fr = (base + UART_FR) as *const u32;
             core::ptr::read_volatile(fr) & UART_FR_TXFF == 0
         }
     }
