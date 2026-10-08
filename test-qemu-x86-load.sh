@@ -173,6 +173,8 @@ build_archive() {   # $1 = Ausgabedatei, $2 = Kernel-ELF, $3 = manifest-version,
         --entry "4:fs:0:1:$PROG/fs.elf:ntfn,ep,shared::1::any:0::3" \
         --entry "5:virtio-net:1:1:$PROG/virtio-net.elf:mmio,dma,ntfn,ep::1::any:0:vendor=1af4,device=1041" \
         --entry "6:wasmhost:2:1:$PROG/wasmhost.elf:ntfn,ep::1::any:0::2" \
+        --entry "7:ipcperm-srv:2:1:$PROG/ipcperm-srv.elf:ntfn,ep:service:1::any:0" \
+        --entry "8:ipcperm-cli:2:1:$PROG/ipcperm-cli.elf:ntfn,ep::1::any:0::7" \
         >/dev/null 2>&1 || return 1
     python3 tools/mkarchive.py "$1" --system-manifest build/system.manifest \
         "1:init:0:1:$PROG/init.elf::certs/init-x86.cert" \
@@ -180,7 +182,9 @@ build_archive() {   # $1 = Ausgabedatei, $2 = Kernel-ELF, $3 = manifest-version,
         "3:virtio-blk:1:1:$PROG/virtio-blk.elf" \
         "4:fs:0:1:$PROG/fs.elf::certs/fs-x86.cert" \
         "5:virtio-net:1:1:$PROG/virtio-net.elf" \
-        "6:wasmhost:2:1:$PROG/wasmhost.elf" >/dev/null 2>&1
+        "6:wasmhost:2:1:$PROG/wasmhost.elf" \
+        "7:ipcperm-srv:2:1:$PROG/ipcperm-srv.elf" \
+        "8:ipcperm-cli:2:1:$PROG/ipcperm-cli.elf" >/dev/null 2>&1
 }
 
 echo "== Boot-Archiv bauen =="
@@ -416,8 +420,8 @@ check "mbmod   : ALL PASS" \
 # Die ZAHL steht hier, nicht bloss "das Archiv parst": ein Archiv, aus dem beim Bauen still ein
 # Modul herausfiel, parst genauso gut -- und der Treiber-Test darunter saehe dann aus wie ein
 # Treiberfehler statt wie ein fehlendes Modul.
-check "archive : 6 Modul(e)" \
-    "A-1.1/A-1.5: das Archiv liegt an der vom Bootloader gemeldeten Adresse und parst (init + hello + virtio-blk + fs)"
+check "archive : 8 Modul(e)" \
+    "A-1.1/A-1.5: das Archiv liegt an der vom Bootloader gemeldeten Adresse und parst (init + hello + virtio-blk + fs + virtio-net + wasmhost + ipcperm-srv + ipcperm-cli)"
 # A1 / Z11c (2026-08-07). **Auf `ALL PASS` geprueft, nicht auf die Zeile** -- die Zeile gibt es
 # auch als SKIP („kein Programm mit EXCLUSIVE_STRIPE geladen"), und genau der Fall ist beim Bau
 # eingetreten: der zweite Ladepfad war nicht umgestellt, `hello` kam ungefaerbt an, und die Suite
@@ -510,6 +514,13 @@ check "root    : ALL PASS (Startprogramm" \
     "A-2.1: Root-Task aus dem Manifest geladen (Hash geprueft, Wurzel-Caps endowt)"
 check "cdelete : ALL PASS" \
     "A-3.1: SYS_CDELETE aus Ring 3 -- beide Ausgaenge belegt (geloescht + Autoritaet weg; mit Ableitungen abgewiesen und weiter benutzbar)"
+# Tagged IPC capabilities, end to end: the server received the permission mask and id the kernel
+# wrote into the badge word, an untagged capability is unchanged, derivation only shrinks, DUP and
+# the 48-bit id are enforced, and only endpoints can be tagged. The line is gated here and not in
+# `all_done()` (same reasoning as `wasm`: a gate on late badges would turn a slow run into a
+# watchdog).
+check "ipcperm : ALL PASS" \
+    "tagged IPC capabilities: the SERVER saw the permission mask and id the kernel delivered (not just what the client asked for)"
 # A-5.1: der erste Treiber, der nicht im Kern laeuft.
 check "drv     : ALL PASS" \
     "A-5.1: ein Treiber als DIENST ausserhalb des Kerns -- eigene Konfigurationsraum-Seite aufgeloest, virtio-Handshake, Sektoren per Bus-Master-DMA auf Anfrage. Der Kernel hat enumeriert, zugeteilt und den Empfaenger ausgetauscht, ohne einen virtio-Schritt auszufuehren"

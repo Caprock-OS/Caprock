@@ -1177,6 +1177,25 @@ const WASM_TRAP: u64 = 1 << 43;
 const WASM_LEBT: u64 = crate::loader::CLIENT_NTFN_BADGE;
 /// Sprechprobe des CAP-Pfads: eine `ccopy`-Kopie mit eigenem Badge, ebenfalls vor der Engine.
 const WASM_CCOPY: u64 = 1 << 45;
+// Tagged IPC capabilities, end to end (`programs/userland/ipcperm-cli`, bits 46..51). The client
+// derives tagged endpoint capabilities, calls the server (`ipcperm-srv`) through them, and the
+// server answers with the permission mask and id the KERNEL put in the badge word. Each bit is
+// one fact; they must match the constants in the client.
+/// Program id of the client in the load suite's manifest (the server is id 7).
+#[cfg(feature = "selftest")]
+const TEST_IPCPERM_PROGRAM_ID: u32 = 8;
+#[cfg(feature = "selftest")]
+const IPCPERM_UNTAGGED: u64 = 1 << 46;
+#[cfg(feature = "selftest")]
+const IPCPERM_TAGGED: u64 = 1 << 47;
+#[cfg(feature = "selftest")]
+const IPCPERM_ATTENUATED: u64 = 1 << 48;
+#[cfg(feature = "selftest")]
+const IPCPERM_DUP_GATED: u64 = 1 << 49;
+#[cfg(feature = "selftest")]
+const IPCPERM_WIDE_ID: u64 = 1 << 50;
+#[cfg(feature = "selftest")]
+const IPCPERM_NOT_ENDPOINT: u64 = 1 << 51;
 /// A-3.1: `SYS_CDELETE` hat die Loader-Cap geloescht **und** die Autoritaet war danach weg.
 #[cfg(feature = "selftest")]
 const CDELETE_GONE_BADGE: u64 = 1 << 33;
@@ -5920,6 +5939,41 @@ fn report_and_off(watchdog: bool) -> ! {
         "cdelete : {} (A-3.1: SYS_CDELETE aus Ring 3 -- beide Ausgaenge belegt, nicht nur der erfolgreiche)",
         if cdelete_done() { "ALL PASS" } else { "FAILURES" }
     );
+
+    // --- Tagged IPC capabilities, end to end ----------------------------------------------------
+    //
+    // Measured at the client's notification (per program, like `wasm`): the client reports six
+    // facts, each only after the SERVER answered with what the kernel delivered. Not part of
+    // `all_done()` -- same reasoning as `wasm`: a gate on badges that may be late would turn a
+    // slow run into a watchdog. The suite gates on this line instead.
+    match crate::loader::client_notification_of(TEST_IPCPERM_PROGRAM_ID) {
+        None => println!(
+            "ipcperm : SKIP -- no ipcperm-cli in the boot set (decided at the endowment table, \
+             not by silence)"
+        ),
+        Some(n) => {
+            let ib = system::notification_pending(n);
+            let facts = [
+                ("untagged-unchanged", ib & IPCPERM_UNTAGGED != 0),
+                ("tagged-mask-and-id-delivered", ib & IPCPERM_TAGGED != 0),
+                ("derivation-only-shrinks", ib & IPCPERM_ATTENUATED != 0),
+                ("no-dup-no-copy", ib & IPCPERM_DUP_GATED != 0),
+                ("wide-id-refused", ib & IPCPERM_WIDE_ID != 0),
+                ("only-endpoints-taggable", ib & IPCPERM_NOT_ENDPOINT != 0),
+            ];
+            print!("ipcperm : badge {ib:#x}");
+            for (name, ok) in facts {
+                print!(" {name}={ok}");
+            }
+            println!();
+            println!(
+                "ipcperm : {} (tagged IPC capabilities: the server received the permission mask \
+                 and id the kernel wrote into the badge word -- unchanged for untagged caps, \
+                 shrinking only along a derivation, DUP-gated, 48-bit id, endpoints only)",
+                if facts.iter().all(|&(_, ok)| ok) { "ALL PASS" } else { "FAILURES" }
+            );
+        }
+    }
 
     // --- A-5.1: hat ein Treiber IM USERLAND sein Geraet bedient? -------------------------------
     //

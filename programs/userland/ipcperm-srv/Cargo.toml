@@ -1,0 +1,15 @@
+# `ipcperm-srv` -- the server half of the tagged-IPC-capability end-to-end test.
+# It receives calls on its service endpoint and answers with what the KERNEL put in the badge
+# word: the permission mask and the object id (`caprock_abi::ipc_perm`).
+[package]
+name = "ipcperm-srv"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ipcperm-srv"
+path = "src/main.rs"
+
+[dependencies]
+libcaprock = { path = "../../libcaprock" }

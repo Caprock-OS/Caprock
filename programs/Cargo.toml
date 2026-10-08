@@ -8,7 +8,7 @@
 [workspace]
 resolver = "2"
 # Programme nach Domaene gegliedert (userland/hardware/trusted). libcaprock = gemeinsames SDK.
-members = ["libcaprock", "userland/hello", "userland/wasmhost", "hardware/virtio-blk", "hardware/virtio-net", "trusted/init", "trusted/svc-demo", "trusted/fs"]
+members = ["libcaprock", "userland/hello", "userland/wasmhost", "userland/ipcperm-srv", "userland/ipcperm-cli", "hardware/virtio-blk", "hardware/virtio-net", "trusted/init", "trusted/svc-demo", "trusted/fs"]
 
 [workspace.package]
 edition = "2021"
