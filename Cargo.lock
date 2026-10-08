@@ -108,6 +108,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "caprock-oom"
+version = "0.0.1"
+
+[[package]]
 name = "caprock-part"
 version = "0.0.1"
 

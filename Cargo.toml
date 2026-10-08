@@ -11,6 +11,7 @@ members = [
     "crates/caprock-sync",
     "crates/caprock-slab",
     "crates/caprock-abi",
+    "crates/caprock-oom",
     "crates/caprock-hal",
     "crates/caprock-virtio",
     "crates/caprock-part",
