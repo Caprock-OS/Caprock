@@ -19,6 +19,7 @@ version = "0.0.1"
 name = "caprock-cap"
 version = "0.0.1"
 dependencies = [
+ "caprock-abi",
  "caprock-mem",
  "caprock-slab",
 ]

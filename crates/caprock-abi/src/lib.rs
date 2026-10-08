@@ -654,6 +654,66 @@ pub const GRANT_FLAG: u64 = 1 << 63;
 /// Slot im Empfänger-Cspace, in dem eine per IPC übertragene Cap landet.
 pub const GRANT_RECV_SLOT: usize = 1;
 
+/// **IPC permissions: the general, kernel-attested rights word of an endpoint capability.**
+///
+/// An endpoint capability can carry a 16-bit *permission mask* next to its badge. A client holds
+/// a derived capability (`CCOPY` with a non-zero permission mask, see [`sys::CCOPY`]); the
+/// **kernel** places the mask in the high 16 bits of the badge word the server receives in
+/// [`reg::EP_BADGE`] on `RECV`:
+///
+/// ```text
+///  63            48 47                              0
+/// +----------------+---------------------------------+
+/// |  permissions   |  object id (chosen by minter)   |
+/// +----------------+---------------------------------+
+/// ```
+///
+/// The client cannot forge either half: the id was fixed when the capability was derived, and the
+/// permissions can only be *removed* on every further derivation (monotone attenuation).
+///
+/// ## What the kernel enforces, and what it does not
+///
+/// The kernel enforces **who may hold, copy and pass on** the capability ([`DUP`], [`GRANT`]) and
+/// that permissions never grow. It does **not** interpret bits `0..=13`: their meaning belongs to
+/// the interface that receives the capability (for a file service, say, bit 0 = read, bit 1 =
+/// write). A server checks `perms_of(badge) & NEEDED` on every request. Keeping the meaning out of
+/// the kernel is what keeps the kernel a microkernel.
+///
+/// A capability that was never derived with a permission mask is *untagged*; it behaves exactly as
+/// before (the badge is delivered unchanged), so existing programs are unaffected.
+pub mod ipc_perm {
+    /// Bit position of the permission mask inside the delivered badge word.
+    pub const SHIFT: u32 = 48;
+    /// Mask for the object id inside the delivered badge word (low 48 bits).
+    pub const ID_MASK: u64 = (1u64 << SHIFT) - 1;
+    /// Kernel-interpreted: the holder may derive further capabilities (`CCOPY`) from this one.
+    pub const DUP: u16 = 1 << 15;
+    /// Kernel-interpreted: the holder may pass this capability on in a `REPLY` grant.
+    pub const GRANT: u16 = 1 << 14;
+    /// Bits whose meaning is defined by the receiving interface, not by the kernel.
+    pub const SERVICE_MASK: u16 = 0x3fff;
+    /// All permissions. The starting point when a permission mask is first applied to an untagged
+    /// endpoint capability.
+    pub const ALL: u16 = 0xffff;
+
+    /// Compose the badge word a server receives.
+    pub const fn wire(perms: u16, id: u64) -> u64 {
+        ((perms as u64) << SHIFT) | (id & ID_MASK)
+    }
+    /// Permission mask of a received badge word.
+    pub const fn perms_of(wire: u64) -> u16 {
+        (wire >> SHIFT) as u16
+    }
+    /// Object id of a received badge word.
+    pub const fn id_of(wire: u64) -> u64 {
+        wire & ID_MASK
+    }
+    /// `true` if `id` fits the id field (a tagged capability rejects wider badges).
+    pub const fn id_fits(id: u64) -> bool {
+        id & !ID_MASK == 0
+    }
+}
+
 /// **Wie viele Caps ein [`sys::LOAD`] hoechstens delegieren kann** (2026-08-25).
 ///
 /// Acht, und die Zahl ist **hergeleitet**, nicht gewaehlt: mehr als `CAP_BUDGET_PER_PD` kann eine
@@ -1015,6 +1075,21 @@ pub mod fork {
 #[cfg(test)]
 mod nummern {
     use super::*;
+
+    #[test]
+    fn ipc_perm_wire_roundtrip_and_layout() {
+        use super::ipc_perm::*;
+        let w = wire(DUP | 0b101, 0xabcd_1234);
+        assert_eq!(perms_of(w), DUP | 0b101);
+        assert_eq!(id_of(w), 0xabcd_1234);
+        // the id never leaks into the permission half
+        assert_eq!(wire(0, u64::MAX), ID_MASK);
+        assert!(!id_fits(1 << 48));
+        assert!(id_fits(ID_MASK));
+        // kernel bits and service bits are disjoint and cover the word
+        assert_eq!(DUP & GRANT, 0);
+        assert_eq!((DUP | GRANT | SERVICE_MASK), ALL);
+    }
 
     #[test]
     fn park_timeout_ist_die_naechste_freie_nummer() {

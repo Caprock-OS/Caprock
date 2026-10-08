@@ -63,6 +63,10 @@ mit_deps() { # $1 = Name, $2 = Crate-Verzeichnis, $3.. = Abhaengigkeiten (Verzei
     echo "== Host-Tests: $name =="
     rm -rf "$SA"; mkdir -p "$SA/src"
     cp -r "$ROOT/crates/$dir/src/." "$SA/src/"
+    # Integration tests (a crate that is `forbid(unsafe_code)` cannot build its own slabs).
+    if [ -d "$ROOT/crates/$dir/tests" ]; then
+        mkdir -p "$SA/tests"; cp -r "$ROOT/crates/$dir/tests/." "$SA/tests/"
+    fi
     {
         printf '[package]\nname="%s"\nversion="0.0.0"\nedition="2021"\n[workspace]\n[lib]\npath="src/lib.rs"\n[dependencies]\n' "$dir"
         for d in "$@"; do
@@ -105,7 +109,7 @@ for z in $ZIELE; do
         loader) einzeln loader "$ROOT/crates/caprock-loader/src/lib.rs" ;;
         # `caprock-cap` haengt an `caprock-mem` und `caprock-slab`. Bis B-5.5 liefen seine Tests
         # deshalb nirgends -- die Huerde war das Manifest, nicht der Code.
-        cap)  mit_deps cap caprock-cap caprock-mem caprock-slab ;;
+        cap)  mit_deps cap caprock-cap caprock-mem caprock-slab caprock-abi ;;
         # `caprock-virtio` ist abhaengigkeitsfrei (A-5.1). Host-pruefbar ist daran die
         # Typestate-Buchhaltung (`owned.rs`, todo E): Schnittarithmetik ueber Adressen, ohne
         # Zugriff und ohne Geraet. Alles andere in der Crate fasst MMIO an und gehoert in die

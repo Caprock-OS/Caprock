@@ -2518,9 +2518,36 @@ fn dispatch_nativ(
                         // ein Programm, das RWX anfordert, bekommt den Schnitt mit dem, was es
                         // selbst hat — sonst wäre CCOPY ein Rechte-Aufwertungsdienst.
                         let want = rights_from_bits(mask).intersect(have);
+                        // `MSG3` is the IPC permission mask (`caprock_abi::ipc_perm`). `0` = an
+                        // ordinary derivation, exactly as before; non-zero = derive a *tagged*
+                        // capability whose mask the kernel will deliver to the server.
+                        let perm_raw = frame_reg(frame, reg::MSG0 + 3);
+                        // A tagged source may only be copied by a holder of the DUP permission.
+                        // Untagged capabilities always may, so existing programs are unaffected.
+                        if !g.cspace.may_dup(src) {
+                            return deny(result::ERR_RIGHTS);
+                        }
                         // `0` = Badge erben. Ein eigenes Badge ist erlaubt, weil der Aufrufer das
                         // Objekt bereits besitzt: er vergibt ein Etikett auf eigener Autoritaet.
-                        let derived = if new_badge != 0 {
+                        let tagged_src = matches!(g.cspace.slot_perms(src), Ok(Some(_)));
+                        let derived = if perm_raw != 0 {
+                            // Only endpoint capabilities have a server to attest to; the mask
+                            // must fit 16 bits, be non-empty, and the id must fit 48 bits.
+                            let is_endpoint =
+                                matches!(g.cspace.kind_of(src), Some(ObjectKind::Endpoint(_)));
+                            if !is_endpoint {
+                                return deny(result::ERR_BADCAP);
+                            }
+                            if perm_raw > u64::from(u16::MAX)
+                                || !caprock_abi::ipc_perm::id_fits(new_badge)
+                            {
+                                return deny(result::ERR_RIGHTS);
+                            }
+                            g.cspace.derive_ipc(src, want, new_badge, perm_raw as u16)
+                        } else if new_badge != 0 {
+                            if tagged_src && !caprock_abi::ipc_perm::id_fits(new_badge) {
+                                return deny(result::ERR_RIGHTS);
+                            }
                             g.cspace.mint(src, want, new_badge)
                         } else {
                             g.cspace.copy(src, want)
@@ -2563,6 +2590,9 @@ fn dispatch_nativ(
         let Some((kind, rights, badge)) = g.cspace.lookup(cap) else {
             return deny(result::ERR_BADCAP);
         };
+        // A tagged IPC capability delivers `permissions << 48 | id` instead of the plain badge
+        // (`caprock_abi::ipc_perm`); for every other capability this is the badge unchanged.
+        let badge = g.cspace.wire_badge(cap).unwrap_or(badge);
         (pd, kind, rights, badge)
     }; // CAPS-Read-Lock hier freigegeben
 
@@ -3416,6 +3446,10 @@ fn grant_cap(
     grant_slot: usize,
 ) -> Option<CapPtr> {
     let src = caps.pds.cap_at(server_pd, grant_slot)?;
+    // A tagged IPC capability may only be passed on by a holder of the GRANT permission.
+    if !caps.cspace.may_grant(src) {
+        return None;
+    }
     let cpd = caps.pds.pd_of(caller)?;
     // **Domänen-Policy VOR der Ableitung prüfen** (konsistent zum zentralen Enforcement-Punkt
     // install_cap_checked) — sonst könnte ein Server eine policy-fremde Cap (z. B. HW-/Loader-/

@@ -538,6 +538,36 @@ pub fn cdelete(slot: u64) -> u64 {
 pub fn ccopy(src: u64, dst: u64, rights: u64, badge: u64) -> u64 {
     invoke(sys::CCOPY, src, [dst, rights, badge, 0], 0).result
 }
+/// IPC permission constants (mirror of `caprock_abi::ipc_perm`; the single source of truth is there).
+pub mod ipc_perm {
+    pub const SHIFT: u32 = 48;
+    pub const ID_MASK: u64 = (1u64 << SHIFT) - 1;
+    pub const DUP: u16 = 1 << 15;
+    pub const GRANT: u16 = 1 << 14;
+    pub const SERVICE_MASK: u16 = 0x3fff;
+    pub const ALL: u16 = 0xffff;
+    /// Permission mask of a badge word received from `recv`.
+    pub const fn perms_of(wire: u64) -> u16 {
+        (wire >> SHIFT) as u16
+    }
+    /// Object id of a badge word received from `recv`.
+    pub const fn id_of(wire: u64) -> u64 {
+        wire & ID_MASK
+    }
+}
+/// **Derive a tagged IPC capability from an endpoint capability** (server side).
+///
+/// `src` must hold an endpoint capability, `dst` must be free. The result carries `id` (48 bits,
+/// `0` = inherit) and the permission mask `perms & mask(src)` (see [`ipc_perm`]); the kernel
+/// delivers both to the server in the badge word of every `CALL` made through it, so a client
+/// cannot forge either. Give the client only `WRITE` in `rights` unless it should also receive.
+/// `perms` must be non-zero and fit 16 bits.
+pub fn ccopy_ipc(src: u64, dst: u64, rights: u64, id: u64, perms: u16) -> u64 {
+    if perms == 0 {
+        return result::ERR_RIGHTS;
+    }
+    invoke(sys::CCOPY, src, [dst, rights, id, perms as u64], 0).result
+}
 /// **Einen Cap im eigenen Cspace verschieben** (A-3.2): `src` → `dst` (muss frei sein). Keine
 /// Ableitung — derselbe Cap, ein anderer Slot.
 pub fn cmove(src: u64, dst: u64) -> u64 {
