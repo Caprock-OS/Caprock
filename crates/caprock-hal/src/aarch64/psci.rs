@@ -1,8 +1,9 @@
-//! PSCI (Power State Coordination Interface) — Sekundärkern-Start.
+//! PSCI (Power State Coordination Interface) — secondary-core start.
 //!
-//! Auf QEMU `virt` ist der Conduit laut DTB `hvc`; PSCI-Aufrufe erfolgen über
-//! die `HVC`-Instruktion (Funktions-IDs gemäß SMCCC/PSCI). Inline-Assembler für
-//! einen Firmware-Call ist eine erlaubte `unsafe`-Domäne.
+//! The call conduit (`hvc` vs `smc`) comes from the platform description (the DTB `/psci`
+//! node, QEMU `virt` fallback `hvc`); the function IDs are architectural (PSCI) and
+//! identical for both conduits. Inline assembly for a firmware call is an allowed
+//! `unsafe` domain.
 
 use core::arch::asm;
 
@@ -18,9 +19,14 @@ pub const SUCCESS: i64 = 0;
 /// erfolgreichem Testdurchlauf aufgerufen, damit das Test-Skript die vollständige
 /// Ausgabe erhält und nicht bis zum Timeout warten muss (kein Abschneiden des Reports).
 pub fn system_off() -> ! {
-    // SAFETY: PSCI-Firmware-Call via HVC; kehrt nicht zurück (Maschine aus).
+    // SAFETY: PSCI firmware call via HVC/SMC (see `super::platform::psci_uses_smc`); does
+    // not return (machine off).
     unsafe {
-        asm!("hvc #0", in("x0") PSCI_SYSTEM_OFF, options(nostack, noreturn));
+        if super::platform::psci_uses_smc() {
+            asm!("smc #0", in("x0") PSCI_SYSTEM_OFF, options(nostack, noreturn));
+        } else {
+            asm!("hvc #0", in("x0") PSCI_SYSTEM_OFF, options(nostack, noreturn));
+        }
     }
 }
 
@@ -34,21 +40,36 @@ pub fn system_off() -> ! {
 /// Rückgabe: PSCI-Statuscode (`SUCCESS` = 0, sonst negativ).
 pub fn cpu_on(target_mpidr: u64, entry_point: u64, context_id: u64) -> i64 {
     let ret: i64;
-    // SAFETY: PSCI-Firmware-Call via HVC. x0..x3 sind Argumente/Rückgabe;
+    // SAFETY: PSCI-Firmware-Call via HVC/SMC. x0..x3 sind Argumente/Rückgabe;
     // x4..x17 dürfen laut SMCCC zerstört werden und werden als Clobber markiert.
     unsafe {
-        asm!(
-            "hvc #0",
-            inlateout("x0") PSCI_CPU_ON => ret,
-            in("x1") target_mpidr,
-            in("x2") entry_point,
-            in("x3") context_id,
-            lateout("x4") _, lateout("x5") _, lateout("x6") _, lateout("x7") _,
-            lateout("x8") _, lateout("x9") _, lateout("x10") _, lateout("x11") _,
-            lateout("x12") _, lateout("x13") _, lateout("x14") _, lateout("x15") _,
-            lateout("x16") _, lateout("x17") _,
-            options(nostack),
-        );
+        if super::platform::psci_uses_smc() {
+            asm!(
+                "smc #0",
+                inlateout("x0") PSCI_CPU_ON => ret,
+                in("x1") target_mpidr,
+                in("x2") entry_point,
+                in("x3") context_id,
+                lateout("x4") _, lateout("x5") _, lateout("x6") _, lateout("x7") _,
+                lateout("x8") _, lateout("x9") _, lateout("x10") _, lateout("x11") _,
+                lateout("x12") _, lateout("x13") _, lateout("x14") _, lateout("x15") _,
+                lateout("x16") _, lateout("x17") _,
+                options(nostack),
+            );
+        } else {
+            asm!(
+                "hvc #0",
+                inlateout("x0") PSCI_CPU_ON => ret,
+                in("x1") target_mpidr,
+                in("x2") entry_point,
+                in("x3") context_id,
+                lateout("x4") _, lateout("x5") _, lateout("x6") _, lateout("x7") _,
+                lateout("x8") _, lateout("x9") _, lateout("x10") _, lateout("x11") _,
+                lateout("x12") _, lateout("x13") _, lateout("x14") _, lateout("x15") _,
+                lateout("x16") _, lateout("x17") _,
+                options(nostack),
+            );
+        }
     }
     ret
 }

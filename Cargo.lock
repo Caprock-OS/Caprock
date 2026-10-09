@@ -16,6 +16,10 @@ name = "caprock-abi"
 version = "0.0.1"
 
 [[package]]
+name = "caprock-acpi"
+version = "0.0.1"
+
+[[package]]
 name = "caprock-cap"
 version = "0.0.1"
 dependencies = [
@@ -40,6 +44,7 @@ name = "caprock-hal"
 version = "0.0.1"
 dependencies = [
  "caprock-abi",
+ "caprock-acpi",
  "caprock-dtb",
  "caprock-sync",
  "caprock-virtio",

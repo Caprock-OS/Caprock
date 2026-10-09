@@ -474,6 +474,24 @@ fn ranges_identity(ranges: Option<&[u8]>, child_ac: u32, parent_ac: u32, size_ce
     true
 }
 
+/// How the OS invokes PSCI firmware (`method` of the `/psci` node).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PsciConduit {
+    /// Hypervisor call (`hvc #0`); what QEMU `virt` announces.
+    Hvc,
+    /// Secure monitor call (`smc #0`); typical on physical hardware with EL3 firmware.
+    Smc,
+}
+
+/// The `/psci` node: only the call conduit is reported. The function IDs (`cpu_on`,
+/// `cpu_off`, ...) are architectural (PSCI §5) and identical for both conduits, so they are
+/// deliberately not parsed — reading them from the tree would suggest they can vary per
+/// machine, which they cannot. What the tree *does* decide is the conduit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PsciInfo {
+    pub conduit: PsciConduit,
+}
+
 /// A GIC interrupt specifier (`<type number flags>`, three cells).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GicIrq {
@@ -869,6 +887,27 @@ impl<'a> Dtb<'a> {
         Some(g)
     }
 
+    /// The `/psci` node (`arm,psci*` compatible), if present and enabled. `None` when the
+    /// tree has no usable PSCI description (absent, disabled, or a `method` other than
+    /// `"hvc"` / `"smc"`).
+    pub fn psci(&self) -> Option<PsciInfo> {
+        let node = self
+            .find_compatible("arm,psci-1.0")
+            .or_else(|| self.find_compatible("arm,psci-0.2"))
+            .or_else(|| self.find_compatible("arm,psci"))?;
+        // The binding puts the node at the root (`/psci`); accept it anywhere, but only
+        // when it is directly usable (CPU-addressability is meaningless for a firmware
+        // calling convention, so unlike MMIO nodes there is no such filter here).
+        let method = node.prop("method")?;
+        if method == b"hvc\0" {
+            Some(PsciInfo { conduit: PsciConduit::Hvc })
+        } else if method == b"smc\0" {
+            Some(PsciInfo { conduit: PsciConduit::Smc })
+        } else {
+            None
+        }
+    }
+
     /// The architected timer node (`arm,armv8-timer`, falling back to `arm,armv7-timer`).
     /// Interrupt specifiers are assumed to be GIC-style triplets.
     pub fn armv8_timer(&self) -> Option<TimerInfo> {
@@ -1018,6 +1057,24 @@ mod tests {
             assert_eq!(g.redist_count, 0);
             assert_eq!(g.its, None);
         }
+    }
+
+    #[test]
+    fn psci_conduit_hvc_on_qemu_smc_on_synthetic() {
+        for blob in [QEMU, EMBEDDED_VIRT] {
+            assert_eq!(
+                dtb(blob).psci(),
+                Some(PsciInfo { conduit: PsciConduit::Hvc }),
+                "QEMU virt calls PSCI via hvc"
+            );
+        }
+        assert_eq!(
+            dtb(SYNTH).psci(),
+            Some(PsciInfo { conduit: PsciConduit::Smc }),
+            "the synthetic fixture covers the smc conduit"
+        );
+        // The Qualcomm tree is a real-world smc case (EL3 firmware, not a hypervisor).
+        assert_eq!(dtb(QCOM).psci(), Some(PsciInfo { conduit: PsciConduit::Smc }));
     }
 
     #[test]

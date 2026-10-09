@@ -28,6 +28,7 @@ kein-df-ist = []
 
 [dependencies]
 # Treiberlogik liegt bewusst AUSSERHALB der HAL (todo A-5.1) -- diese Crate haengt an nichts.
+caprock-acpi = { path = "../caprock-acpi" }
 caprock-virtio = { path = "../caprock-virtio" }
 caprock-sync = { path = "../caprock-sync" }
 caprock-abi = { path = "../caprock-abi" }

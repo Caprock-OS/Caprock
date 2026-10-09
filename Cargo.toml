@@ -23,6 +23,7 @@ members = [
     "crates/caprock-sched",
     "crates/caprock-ipc",
     "crates/caprock-microkit",
+    "crates/caprock-acpi",
     "crates/caprock-dtb",
     "crates/caprock-dma",
     "crates/caprock-wait",

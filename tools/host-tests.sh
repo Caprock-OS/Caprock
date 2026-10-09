@@ -77,7 +77,7 @@ mit_deps() { # $1 = Name, $2 = Crate-Verzeichnis, $3.. = Abhaengigkeiten (Verzei
     rm -rf "$SA"
 }
 
-ZIELE="${*:-mem part fat cycles loader cap virtio dma wait region irte irteneg grossdmaneg dmar dmarneg iohealth smt numa bootparams fbtext dtb platform redirect cspace redirectneg typestate ipctreue schedtreue}"
+ZIELE="${*:-mem part fat cycles loader cap virtio dma wait region irte irteneg grossdmaneg dmar dmarneg iohealth smt numa bootparams fbtext dtb acpi platform redirect cspace redirectneg typestate ipctreue schedtreue}"
 for z in $ZIELE; do
     case "$z" in
         mem)  einzeln mem  "$ROOT/crates/caprock-mem/src/lib.rs" ;;
@@ -175,14 +175,17 @@ for z in $ZIELE; do
         fbtext) einzeln fbtext "$ROOT/crates/caprock-hal/src/fbtext.rs" ;;
         # Device-tree parser (real QEMU virt + Qualcomm X1P42100 blobs under tests/fixtures).
         dtb) einzeln dtb "$ROOT/crates/caprock-dtb/src/lib.rs" ;;
-        # Platform description: a single hal file that needs `caprock_dtb` as an rlib.
+        # Static ACPI table parser (real-table-shaped blobs built in-code, no AML).
+        acpi) einzeln acpi "$ROOT/crates/caprock-acpi/src/lib.rs" ;;
+        # Platform description: a single hal file that needs `caprock_dtb` + `caprock_acpi` as rlibs.
         platform)
             echo "== Host-Tests: platform =="
             if $RUSTC --crate-type rlib --crate-name caprock_dtb --edition 2021 -O "$ROOT/crates/caprock-dtb/src/lib.rs" -o "$TMP/libcaprock_dtb.rlib" 2>&1 | grep -E "^error" -A 6; then :; fi
+            if $RUSTC --crate-type rlib --crate-name caprock_acpi --edition 2021 -O "$ROOT/crates/caprock-acpi/src/lib.rs" -o "$TMP/libcaprock_acpi.rlib" 2>&1 | grep -E "^error" -A 6; then :; fi
             rm -f "$TMP/hosttest_platform"
-            if $RUSTC --test --edition 2021 -O --extern caprock_dtb="$TMP/libcaprock_dtb.rlib" "$ROOT/crates/caprock-hal/src/aarch64/platform.rs" -o "$TMP/hosttest_platform" 2>&1 | grep -E "^error" -A 6; then :; fi
+            if $RUSTC --test --edition 2021 -O --extern caprock_dtb="$TMP/libcaprock_dtb.rlib" --extern caprock_acpi="$TMP/libcaprock_acpi.rlib" "$ROOT/crates/caprock-hal/src/aarch64/platform.rs" -o "$TMP/hosttest_platform" 2>&1 | grep -E "^error" -A 6; then :; fi
             if [ -x "$TMP/hosttest_platform" ]; then "$TMP/hosttest_platform" || fail=1; else echo "  FEHLER: platform liess sich nicht uebersetzen"; fail=1; fi
-            rm -f "$TMP/hosttest_platform" "$TMP/libcaprock_dtb.rlib" ;;
+            rm -f "$TMP/hosttest_platform" "$TMP/libcaprock_dtb.rlib" "$TMP/libcaprock_acpi.rlib" ;;
         # ... und die Gegenprobe dazu: die Tests oben sehen nur den BEHOBENEN Zustand. Vier
         # Mutationen bauen den Fehler einzeln wieder ein, jede mit dem NAMEN des Tests, der fallen
         # muss (sonst waere „irgendetwas ist rot" schon ein Beleg).
@@ -245,7 +248,7 @@ for z in $ZIELE; do
             else
                 bash "$ROOT/tools/verus-modelltreue-sched.sh" || fail=1
             fi ;;
-        *)    echo "  FEHLER: unbekanntes Ziel '$z' (bekannt: mem part fat cycles loader cap virtio dma wait region irte irteneg grossdmaneg dmar dmarneg iohealth smt numa bootparams fbtext dtb platform redirect cspace redirectneg typestate ipctreue schedtreue)"; fail=1 ;;
+        *)    echo "  FEHLER: unbekanntes Ziel '$z' (bekannt: mem part fat cycles loader cap virtio dma wait region irte irteneg grossdmaneg dmar dmarneg iohealth smt numa bootparams fbtext dtb acpi platform redirect cspace redirectneg typestate ipctreue schedtreue)"; fail=1 ;;
     esac
 done
 

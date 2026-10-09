@@ -1,0 +1,9 @@
+# Static ACPI table parser. Pure, safe slice parsing (no AML interpreter).
+[package]
+name = "caprock-acpi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]

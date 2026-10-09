@@ -7,6 +7,10 @@
 	#size-cells = <1>;
 	compatible = "caprock,synthetic";
 	aliases { serial0 = "/soc/uart@10000000"; };
+	psci {
+		compatible = "arm,psci-1.0", "arm,psci-0.2", "arm,psci";
+		method = "smc";
+	};
 	chosen {
 		#address-cells = <1>; #size-cells = <1>; ranges;
 		stdout-path = "serial0:115200n8";
