@@ -1694,6 +1694,86 @@ struct ReloadInfo {
 }
 static RELOAD_INFO: SpinLock<Option<ReloadInfo>> = SpinLock::new(None);
 
+// C7b depth probe (ARM counterpart of the x86 Tiefensonde): an isolated EL0
+// thread touches its own private stack down to the known depth SONDE_TIEFE
+// and SIGNALs when done. The main loop measures its live region once the
+// badge is pending. This is the speaking probe of the MEASURED path, which
+// calibration structurally cannot see: a bookkeeping entry pointing at a
+// foreign, zeroed region reports "plenty of air" and passes every
+// calibration — the exact confusion that once voided the capacity line.
+static DEPTH_TID: AtomicU64 = AtomicU64::new(u64::MAX);
+static DEPTH_NTFN: AtomicU64 = AtomicU64::new(u64::MAX);
+/// Badge the depth probe SIGNALs with (own notification, any nonzero value).
+const DEPTH_BADGE: u64 = 1;
+
+// The probe depth in 8-byte words (checked below: no silent truncation).
+const _: () = assert!(crate::userstackmark::SONDE_TIEFE % 8 == 0);
+
+/// EL0 depth probe (`.user_text`, isolated VSpace): touches SONDE_TIEFE bytes
+/// BELOW the current SP — a range no interrupt or exception ever uses (EL1
+/// runs on SP_EL1; there is no signal delivery in this system), then SIGNALs
+/// slot 0 and keeps yielding so it stays measurable while alive.
+///
+/// The touch count comes in as a plain value so the `ustack-gegenprobe`
+/// feature isolates EXACTLY one conjunct: with it the probe SIGNALs without
+/// touching, `measured=true` holds and only `hit` falls.
+#[link_section = ".user_text"]
+extern "C" fn ustack_depth_probe(_arg: usize) -> ! {
+    // Touch count: the known depth, or zero under the counter-proof feature.
+    #[cfg(not(feature = "ustack-gegenprobe"))]
+    let n = (crate::userstackmark::SONDE_TIEFE / 8) as u64;
+    #[cfg(feature = "ustack-gegenprobe")]
+    let n = 0u64;
+    // SAFETY: pure EL0 code. Only its own EL0 stack is written, `n*8` bytes
+    // BELOW the current SP; the private region is orders of magnitude larger,
+    // and unmapped VA lies beneath — an order-of-magnitude mistake faults
+    // instead of hitting foreign memory.
+    unsafe {
+        core::arch::asm!(
+            "cbz x11, 4f",          // zero iterations: nothing to touch
+            "mov x9, sp",           // x9 = cursor (SP itself is never moved)
+            "movz x10, #0x5A5A",
+            "movk x10, #0xA5A5, lsl #16", // nonzero pattern (zero is invisible)
+            "2:",
+            "sub x9, x9, #8",
+            "str x10, [x9]",
+            "subs x11, x11, #1",
+            "b.ne 2b",
+            "4:",
+            "mov x0, #8",           // sys::SIGNAL, slot 0 (done touching)
+            "mov x1, #0",
+            "svc #0",
+            "3:",
+            "mov x0, #0",           // sys::YIELD: stay preemptible, stay alive
+            "svc #0",               // (measured on the LIVING thread)
+            "b 3b",
+            in("x11") n,
+            options(noreturn),
+        );
+    }
+}
+
+/// Re-measure the depth probe once it has SIGNALled — from the main loop, so
+/// BEFORE the report. A measurement born in the report cannot trigger it.
+///
+/// Polled, never waited on: "is it done yet" is answerable every pass, and if
+/// it never is, the conjunct stays false and the run visibly fails (`open:
+/// ustack`) instead of inventing a success.
+fn depth_probe_measure() {
+    if crate::userstackmark::sonde_stand().0 {
+        return; // already measured
+    }
+    let n = DEPTH_NTFN.load(Ordering::Acquire);
+    if n == u64::MAX || system::notification_pending(n as usize) & DEPTH_BADGE == 0 {
+        return; // still touching
+    }
+    let raw = DEPTH_TID.load(Ordering::Acquire);
+    if raw == u64::MAX {
+        return;
+    }
+    system::userstack_sonde_pruefen(ThreadId::from_raw(raw));
+}
+
 /// PDs + Endpoint + Caps anlegen und Demo-Threads (v1, Client, Worker) starten.
 pub fn spawn_demo() {
     // Die drei Farbtests (A1, B-4.2, B-4.5) laufen hier **nicht mehr** -- und auch nicht mehr
@@ -2107,6 +2187,29 @@ pub fn spawn_demo() {
     RMIG_V2_PD.store(rm_v2_pd, Ordering::Relaxed);
     RMIG_CLIENT_PD.store(rm_c_pd, Ordering::Relaxed);
     RMIG_EP_ID.store(rmep, Ordering::Relaxed);
+    // C7b depth probe: isolated (NOT SAS) — what is measured must be exactly
+    // the kind of region at stake (the private region of an isolated PD), not
+    // some other stack. Its ThreadId is published right after admission so the
+    // main loop can re-measure it as soon as the probe SIGNALs (the SIGNAL
+    // itself only ever happens after admission, so no consumer can observe
+    // the unpublished window).
+    {
+        let d_ntfn = system::create_notification().expect("depth ntfn");
+        let d_root = system::install_notification_cap(d_ntfn as u32, Rights::RWX)
+            .expect("depth ntfn cap");
+        let d_sig = system::cap_mint(d_root, Rights::WRITE, DEPTH_BADGE).expect("depth sig");
+        let d_pd = system::create_pd().expect("depth probe pd");
+        system::install_pd_cap(d_pd, 0, d_sig);
+        if let Some((dp, _)) =
+            system::spawn_isolated_parked(ustack_depth_probe as *const () as usize, 0, prio)
+        {
+            if let Some(tid) = system::admit_in_pd(d_pd, dp) {
+                DEPTH_TID.store(tid.to_raw(), Ordering::Release);
+                DEPTH_NTFN.store(d_ntfn as u64, Ordering::Release);
+            }
+        }
+    }
+
     // Sicherheitsdomänen-Fixtures (ext-22, P1) werden NICHT hier angelegt, sondern LAZY im
     // Manager-Schritt (nach allen Fuzzer-/Reclaim-Tests), damit ihre 2 isolierten EL0-Threads
     // den kstack-Pool/ASIDs der früheren Tests nicht beanspruchen (sonst Pool-/Timing-Races).
@@ -3470,6 +3573,7 @@ pub fn demo_report_then_idle() -> ! {
         if n > 0 {
             REAPED.fetch_add(n as u64, Ordering::Relaxed);
         }
+        depth_probe_measure(); // C7b, once (speaking probe of the measured path)
         if !reloaded && BATCH1_DONE.load(Ordering::Acquire) {
             do_reload();
             RELOADED.store(true, Ordering::Release);
@@ -5150,7 +5254,7 @@ pub fn demo_report_then_idle() -> ! {
 /// ist (abgeleitet statt gezaehlt) -- hier faengt der Typ es wenigstens beim Bau ab, weil die
 /// Liste ein Array fester Laenge ist. **Der Bau hat es auch getan**, und zwar nur unter
 /// `--features selftest`: ein Bau ohne das Merkmal enthaelt diese Datei gar nicht.
-const DONE_FLAGS_ARM: usize = 61;
+const DONE_FLAGS_ARM: usize = 65;
 
 fn all_done(warum: Option<&mut [(&'static str, bool); DONE_FLAGS_ARM]>) -> bool {
     let workers = (0..NWORKERS).all(|i| WORKER_COUNTS[i].load(Ordering::Relaxed) >= THRESHOLD);
@@ -5376,6 +5480,14 @@ fn all_done(warum: Option<&mut [(&'static str, bool); DONE_FLAGS_ARM]>) -> bool 
         // der Suite. Die Sonde steht dort unten, weil sie Speicher belegt und ein Test, der
         // Speicher belegt, baseline-empfindliche Tests kippt.
         ("arena", !crate::spawnarena::urteil().gattert()),
+        // C4/C7b/C9/C9b verdict gates (ARM parity, C9d): the same verdict shape as
+        // the x86 path. Calibration runs on both architectures; from here the
+        // report line AND the gate do too. Each criterion is formulated against
+        // the EFFECT (used depth, masked hold time, no torn line), not a state.
+        ("kstack", crate::kstackmark::urteil()),
+        ("ustack", crate::userstackmark::urteil()),
+        ("sperre", crate::sperrmark::urteil()),
+        ("konsole", crate::sperrmark::konsole_urteil()),
     ];
     if let Some(w) = warum {
         *w = flags;
@@ -6227,4 +6339,104 @@ fn report() {
     );
 
     // (HW-Fuzzer-Reportzeile wird von `fuzz::report()` ausgegeben, ADR 0013.)
+
+    // C4/C7b/C9/C9b report lines (ARM parity, C9d): the same verdict shape as
+    // the x86 path. Sweep first, then judge — the reclaim path only measures
+    // DYING threads, and the long-lived ones (IPC servers, driver PDs, root
+    // task) never die in a green run. Sweeping can only WORSEN the verdict,
+    // never improve it, so gate-vs-report skew fails closed.
+    {
+        let (swept, deepest) = system::kstack_marke_fegen();
+        let e = crate::kstackmark::marke(crate::kstackmark::KL_EL0);
+        let per_mille = if e.groesse == 0 {
+            0
+        } else {
+            (e.tiefe_max as u64 * 1000) / e.groesse as u64
+        };
+        println!(
+            "kstack  : EL0-kstack high-water mark {} of {} B ({}.{} %) · reserve at least {} B · {} filled / {} measured ({} of them over LIVE stacks swept at the end, deepest live slot {}) · without pattern at the foot: {} (must be 0 — 'exhausted OR never filled', both fail the same way)",
+            e.tiefe_max,
+            e.groesse,
+            per_mille / 10,
+            per_mille % 10,
+            if e.frei_min == usize::MAX { 0 } else { e.frei_min },
+            e.gefuellt,
+            e.gemessen,
+            swept,
+            if deepest == usize::MAX { u64::MAX } else { deepest as u64 },
+            e.erschoepft,
+        );
+        let (s_path, s_irq, s_res, s_size, s_n) = crate::kstackmark::summe();
+        println!(
+            "kstack  : SUM (structural, not statistical) — deepest path {} B + deepest IRQ handler {} B ({} samples) + required reserve {} B = {} B of {} B. Added because an interrupt can arrive exactly at the deepest point, on the SAME stack: EL1 traps run on SP_EL1, the thread's own kstack. There are no side stacks here.",
+            s_path, s_irq, s_n, s_res, s_path + s_irq + s_res, s_size
+        );
+        println!(
+            "kstack  : {} (C4: required minimum reserve {} B = 1/{} of the stack, calibration {:#06b}/{:#06b}, at least {} measurements before the gate)",
+            if crate::kstackmark::urteil() { "ALL PASS" } else { "FAILURES" },
+            crate::kstackmark::mindestreserve(e.groesse),
+            crate::kstackmark::MIND_RESERVE_NENNER,
+            crate::kstackmark::eichstand(),
+            crate::kstackmark::EICH_ALLE,
+            crate::kstackmark::MIND_MESSUNGEN,
+        );
+    }
+
+    // C7b: the EL0 water mark — how deep does the USER stack really go? Same
+    // shape as above: the other side of the same thread (its private region,
+    // the largest single item per tenant).
+    {
+        let (swept, deepest) = system::userstack_marke_fegen();
+        let u = crate::userstackmark::marke();
+        let (s_measured, s_ok, s_depth) = crate::userstackmark::sonde_stand();
+        let smallest = if u.groesse_min == usize::MAX { 0 } else { u.groesse_min };
+        println!(
+            "ustack  : EL0 user-stack high-water mark {} of smallest region {} B ({} live regions swept at the end, deepest live slot {}) · {} registered / {} measured ({} of them before the gate) · foot not zeroed: {} (must be 0) · never used: {}",
+            u.tiefe_max,
+            smallest,
+            swept,
+            if deepest == usize::MAX { u64::MAX } else { deepest as u64 },
+            u.registriert,
+            u.gemessen,
+            u.gemessen_tod,
+            u.erschoepft,
+            u.nie_benutzt,
+        );
+        println!(
+            "ustack  : origin of the high-water mark — dying threads {} B, living {} B · record holder thread slot {} in a {} B region",
+            u.tiefe_tod,
+            u.tiefe_lebend,
+            if u.tiefster_slot == usize::MAX { u64::MAX } else { u.tiefster_slot as u64 },
+            u.tiefste_groesse,
+        );
+        println!(
+            "ustack  : depth probe (speaking probe of the MEASURED path) — measured={} hit={} reported depth={} B vs touched {} B (+{} B slack for its own frame). It checks what calibration structurally CANNOT: that the bookkeeping maps thread slot to the RIGHT region",
+            s_measured,
+            s_ok,
+            s_depth,
+            crate::userstackmark::SONDE_TIEFE,
+            crate::userstackmark::SONDE_SCHLUPF,
+        );
+        let (s_path, s_second, s_res, s_small) = crate::userstackmark::summe();
+        println!(
+            "ustack  : SUM — deepest path {} B + second term {} B (NULL on EL0: a trap from EL0 ALWAYS switches stacks, aarch64 runs the kernel on SP_EL1) + required reserve {} B = {} B of {} B (smallest region)",
+            s_path, s_second, s_res, s_path + s_second + s_res, s_small
+        );
+        println!(
+            "ustack  : {} (C7b: required minimum reserve {} B = 1/{} of the smallest region, calibration {:#06b}/{:#06b}, at least {} measurements before the gate)",
+            if crate::userstackmark::urteil() { "ALL PASS" } else { "FAILURES" },
+            crate::userstackmark::mindestreserve(smallest),
+            crate::userstackmark::MIND_RESERVE_NENNER,
+            crate::userstackmark::eichstand(),
+            crate::userstackmark::EICH_ALLE,
+            crate::userstackmark::MIND_MESSUNGEN,
+        );
+    }
+
+    // C9: lock-hold duration, and C9b: the console write order behind it.
+    // Both report functions are arch-neutral ("to be called from both bring-up
+    // paths"); the ARM console driver measures through the same shared
+    // write-order object as the 16550 one (PL011 MMIO instead of port I/O).
+    crate::sperrmark::bericht();
+    crate::sperrmark::konsole_bericht();
 }

@@ -65,21 +65,26 @@
 //!    Dagegen `RUECKWAERTS` in der Wacht: rueckwaerts heisst **verworfen und gezaehlt**, und das
 //!    Urteil verlangt `0`.
 //!
-//! # Reichweite: die Eichung laeuft ueberall, das GATTER nur auf x86
+//! # Reach: calibration runs everywhere, the GATE now does too (C9d)
 //!
-//! [`eichung`] und [`probe`] laufen aus `selftest::run()`, also auf **beiden** Architekturen (auf
-//! aarch64 besteht die Eichung ebenfalls vollstaendig). [`bericht`] und der `sperre`-Eintrag in
-//! `all_done()` stehen dagegen nur im x86-Hochlaufweg -- dieselbe Einordnung wie `kstackmark`.
+//! [`eichung`] and [`probe`] run from `selftest::run()`, i.e. on **both**
+//! architectures. Since C9d, [`bericht`], [`konsole_bericht`] and the
+//! `sperre`/`konsole` entries in `all_done()` run on the aarch64 report path
+//! (`threads/mod.rs`) as well — same verdict shape as the x86 path. The ARM
+//! console driver measures through the same shared write-order object
+//! (`caprock_hal::konsole`); only the port access differs (PL011 MMIO vs
+//! 16550 port I/O), so its numbers are its own, not copied from x86.
 //!
-//! **Von den zwei Gruenden dafuer (todo C9d) ist am 2026-08-13 EINER weggefallen.** Der erste
-//! war, dass die Schuldliste unten mit `console.rs` einen **x86-Pfad** enthielt -- eine Schuld,
-//! die auf aarch64 niemand gemessen hatte. Mit der Behebung von C9b ist dieser Posten weg, und
-//! die Schreibordnung der Konsole ist auf beiden Architekturen dieselbe (`crate::konsole`). Der
-//! zweite Grund steht: die aarch64-Suite ist auf diesem Zweig **vorbestehend rot**
-//! (`color : FAILURES` mit lauter Nullen, 3 von 3 auch auf dem unveraenderten Baum, todo C9e) --
-//! ein Gatter dort waere nicht abnehmbar, und ein nicht abnehmbares Gatter faerbt die Suite,
-//! statt sie zu schaerfen. **C9d haengt damit nur noch an C9e**, und das ist eine kleinere
-//! Aussage als vorher.
+//! **Of the two reasons that once kept the gate off aarch64 (todo C9d), ONE is
+//! gone since 2026-08-13.** The first was that the debt list below held an
+//! **x86 path** in `console.rs` — a debt nobody had measured on aarch64. With
+//! the C9b fix that entry is gone, and the console write order is the same on
+//! both architectures (`crate::konsole`). The second reason stood: the
+//! aarch64 suite was **red beforehand** on this branch (`color : FAILURES`
+//! with all zeros, 3 of 3 on the unmodified tree, todo C9e) — a gate there
+//! would not have been acceptable, and an unacceptable gate colors the suite
+//! instead of sharpening it. **C9d thus hung on C9e alone**, a smaller claim
+//! than before.
 //!
 //! # Die Gegenprobe ist der eigentliche Beleg
 //!
