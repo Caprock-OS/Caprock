@@ -1861,6 +1861,24 @@ pub fn spawn_demo() {
     let bad = system::spawn_user_parked(bad_user as *const () as usize, 0, prio).expect("bad user thread");
     let bad = system::admit_in_pd(bad_pd, bad).expect("zulassen");
 
+    // Strand-7 guard probe: dedizierte Kratz-Wache in GiB 1 + SAS-EL0-Beruehrung.
+    // Spaet in der Spawn-Reihe vorbereitet: Zu diesem Zeitpunkt stehen bereits
+    // viele Stack-Wachen (echter Vorratsdruck), und die Sonde beweist die Kette
+    // Ende-zu-Ende (legen -> stehen (rueckgelesen) -> EL0-Fault mit FAR=Wache).
+    match system::guard_sonde_vorbereiten() {
+        Some(wache) => {
+            let g_pd = system::create_pd().expect("guard probe pd");
+            match system::spawn_user_parked(guard_probe as *const () as usize, wache as usize, prio) {
+                Some(g) => match system::admit_in_pd(g_pd, g) {
+                    Some(tid) => system::guard_sonde_arm(wache, tid.to_raw()),
+                    None => println!("guard   : Sonde vorbereitet (Wache={wache:#x}), aber nicht zugelassen"),
+                },
+                None => println!("guard   : Sonde vorbereitet (Wache={wache:#x}), aber kein Thread entstanden"),
+            }
+        }
+        None => println!("guard   : Sonde NICHT SCHARF (keine Wache legbar — das Urteil faellt auf FAILURES)"),
+    }
+
     // Per-Kern-paralleler Scheduler: je einen Worker auf JEDEN Sekundärkern (1..N)
     // einplanen (die Kerne booten gleich per PSCI und picken ihn auf). Sie laufen
     // parallel zu core 0 — jeder Kern schedult über seine eigene Instanz.
@@ -3170,6 +3188,35 @@ extern "C" fn bad_user(_arg: usize) -> ! {
     }
 }
 
+/// **Strand-7 guard probe** (Sektion `.user_text`, EL0-ausführbar, SAS-Domain).
+/// Berührt eine dedizierte Kratz-Wache (x0 = Wachseite, x0+4096 = eigene
+/// Kontrollseite, abgebildet). Die Kontroll-Ladung MUSS gelingen — sie belegt,
+/// dass EL0 den Block lesen kann (Gegenbeleg: der Wachen-Fault kommt von der
+/// Wache, nicht von einer fehlenden Abbildung); die Wachen-Ladung MUSS faulten.
+/// Erreicht der Thread das PARK, gab es keine Wache (die alte Zaehler-Semantik)
+/// — das Urteil faellt dann auf FAILURES, nicht auf Stille.
+#[link_section = ".user_text"]
+extern "C" fn guard_probe(_arg: usize) -> ! {
+    // SAFETY: EL0-User-Code. Die zweite Ladung SOLL faulten (der Kernel beendet
+    // den Thread im Fault-Hook und laeuft weiter).
+    unsafe {
+        core::arch::asm!(
+            "mov x9, x0",
+            "ldr x2, [x9, #4096]", // Kontrolle: abgebildet -> muss gelingen
+            "ldr x3, [x9]",        // Wache: nicht abgebildet -> muss faulten
+            "mov x0, #5",          // (nur ohne Wache erreichbar) parken
+            "svc #0",
+            options(nostack),
+        );
+    }
+    loop {
+        // SAFETY: Fallback (nur ohne Wache erreichbar) — parken.
+        unsafe {
+            core::arch::asm!("svc #0", in("x0") sys::PARK, options(nostack));
+        }
+    }
+}
+
 /// Service-Server: verdreifacht (erreichbar nur über eine transferierte Cap).
 extern "C" fn svc_server(_arg: usize) -> ! {
     loop {
@@ -3409,7 +3456,7 @@ pub fn demo_report_then_idle() -> ! {
                 dbg_printed = true;
             }
             let m = ISO_MASK.load(Ordering::Relaxed);
-            println!("DBG pending: workers={} fp={} prio={} life={} notif={} xfer={} ckpt={} el0={} smp={} xipc={} reclaim={} balance={} vspace={} vmm={} shm={} native={} pages4k={} churn={} mcs={} stale={} strand={} rgone={} ddon={} rcap={} rmig={} fuzz={} ipcfuzz={} caplk={} domain={} pdctl={} chan={} rtc={} irq={} dma={} pcie={} smmu={} smmubind={} virtiorng={} dmagen={} sasheap={} load={} sysload={} loadhw={} loadstop={} loaderfuzz={} aggru={} intru={} aggrh={} intrh={} aggrt={} intrt={} cross={} hwfuzz={}",
+            println!("DBG pending: workers={} fp={} prio={} life={} notif={} xfer={} ckpt={} el0={} smp={} xipc={} reclaim={} balance={} vspace={} vmm={} shm={} native={} pages4k={} churn={} mcs={} stale={} strand={} rgone={} ddon={} rcap={} rmig={} fuzz={} ipcfuzz={} caplk={} domain={} pdctl={} chan={} rtc={} irq={} dma={} pcie={} smmu={} smmubind={} virtiorng={} dmagen={} sasheap={} load={} sysload={} loadhw={} loadstop={} loaderfuzz={} aggru={} intru={} aggrh={} intrh={} aggrt={} intrt={} cross={} hwfuzz={} guard={}",
                 (0..NWORKERS).all(|i| WORKER_COUNTS[i].load(Ordering::Relaxed) >= THRESHOLD),
                 FP_COLLECTOR_DONE.load(Ordering::Acquire) && system::fp_switch_count() > 0,
                 (0..NPRIO_TEST).all(|i| PRIO_DONE[i].load(Ordering::Acquire)),
@@ -3463,6 +3510,7 @@ pub fn demo_report_then_idle() -> ! {
                 INTRT_DONE.load(Ordering::Acquire) && INTRT_OK.load(Ordering::Acquire),
                 CROSS_DONE.load(Ordering::Acquire) && CROSS_OK.load(Ordering::Acquire),
                 fuzz::dbg_hwfuzz(),
+                system::guard_sonde_urteil().3,
             );
         }
         // Beendete Threads einsammeln (sicher: läuft auf dem Idle-Stack).
@@ -5150,7 +5198,7 @@ pub fn demo_report_then_idle() -> ! {
 /// ist (abgeleitet statt gezaehlt) -- hier faengt der Typ es wenigstens beim Bau ab, weil die
 /// Liste ein Array fester Laenge ist. **Der Bau hat es auch getan**, und zwar nur unter
 /// `--features selftest`: ein Bau ohne das Merkmal enthaelt diese Datei gar nicht.
-const DONE_FLAGS_ARM: usize = 61;
+const DONE_FLAGS_ARM: usize = 62;
 
 fn all_done(warum: Option<&mut [(&'static str, bool); DONE_FLAGS_ARM]>) -> bool {
     let workers = (0..NWORKERS).all(|i| WORKER_COUNTS[i].load(Ordering::Relaxed) >= THRESHOLD);
@@ -5205,6 +5253,10 @@ fn all_done(warum: Option<&mut [(&'static str, bool); DONE_FLAGS_ARM]>) -> bool 
     let native = m & ISO_BADGE_NATIVE != 0;
     // 4-KiB-Seiten: RW-Schreiben + RO-Lesen einzelner Seiten erfolgreich.
     let pages4k = m & ISO_BADGE_PAGES != 0;
+    // Strand-7: die Wachen-Sonde faultete mit FAR == Wache (eingerastet, s.
+    // `guard_sonde_urteil`) — in der Abschlussbedingung, nicht bloss im
+    // Bericht: eine Zusicherung, die nur druckt, faellt niemandem auf.
+    let guard = system::guard_sonde_urteil().3;
     // Churn/Leak: tausende spawn/destroy-Zyklen ohne Ressourcen-Leck.
     let churn = CHURN_DONE.load(Ordering::Acquire) && CHURN_OK.load(Ordering::Acquire);
     // MCS: budget-basiertes Scheduling — budgetierter Thread gedrosselt, Budget gebunden.
@@ -5316,6 +5368,7 @@ fn all_done(warum: Option<&mut [(&'static str, bool); DONE_FLAGS_ARM]>) -> bool 
         ("shm", shm),
         ("native", native),
         ("pages4k", pages4k),
+        ("guard", guard),
         ("churn", churn),
         ("mcs", mcs),
         ("stale", stale),
@@ -5824,6 +5877,17 @@ fn report() {
     println!(
         "pages4k : {} (4-KiB-Mappings: gemischte RW/RO-Rechte + Guard Pages + L3)",
         if pages4k { "ALL PASS" } else { "FAILURES" }
+    );
+
+    // Strand-7: ARM-Kernel-Stack-Wachen — dedizierte Kratz-Wache + EL0-Beruehrung.
+    // Das Urteil ist rein aus eingerasteten Werten (erwartete Wache, eingerastete
+    // FAR): `all_done()` und diese Zeile lesen dieselbe Wirklichkeit.
+    let (g_erw, g_far, g_ec, guard_ok) = system::guard_sonde_urteil();
+    let (gd_live, gd_total, gd_denied, gd_blk, gd_blkcap) = hal::mmu::guard_stats();
+    println!("guard   : Sonde Wache={g_erw:#x} FAR={g_far:#x} EC={g_ec:#04x} (Kontrolle+4096 gelesen, Wache muss faulten); Guard-Pages {gd_live} stehen / {gd_total} gesetzt / {gd_denied} abgewiesen, {gd_blk}/{gd_blkcap} aufgeteilte 2-MiB-Bloecke");
+    println!(
+        "guard   : {} (Guard-Pages auf ARM: Stack-Wachen stehen + EL0-Zugriff faultet mit FAR=Wache)",
+        if guard_ok { "ALL PASS" } else { "FAILURES" }
     );
 
     // Churn/Leak: tausende spawn/destroy-Zyklen, Ressourcen kehren zur Baseline.

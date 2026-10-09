@@ -918,6 +918,98 @@ static EL0_FAULTS: AtomicUsize = AtomicUsize::new(0);
 /// (Beleg, dass die Hardware-Adressraumtrennung Fremd-/unmapped-Zugriffe verhindert.)
 static ISO_FAULTS: AtomicUsize = AtomicUsize::new(0);
 
+// --- Strand-7 guard probe (aarch64 kernel-stack guards) --------------------------
+//
+// A dedicated scratch guard in GiB 1 plus one SAS EL0 thread that touches it.
+// The probe's control load (guard + PAGE, mapped) must succeed — that is the
+// counter-proof that the guard fault is the guard's doing, not a missing
+// mapping — and the guard load must fault with FAR == the guard address.
+// Wiring minima in this shared file (B review flagged): three latched
+// statics, one recording call in `el0_fault`, three small functions. The
+// probe thread itself and its verdict live in `threads` (aarch64-only).
+/// ThreadId (raw) of the guard probe thread (`u64::MAX` = none armed).
+#[cfg(feature = "selftest")]
+static GUARD_SONDE_TID: AtomicU64 = AtomicU64::new(u64::MAX);
+/// Expected fault address: the scratch guard page (0 = none prepared).
+#[cfg(feature = "selftest")]
+static GUARD_SONDE_ADDR: AtomicU64 = AtomicU64::new(0);
+/// Latched FAR of the probe thread's fault (first fault wins: the probe
+/// faults once, immediately; a later slot reuse must not overwrite it).
+/// 0 = the probe never faulted.
+#[cfg(feature = "selftest")]
+static GUARD_SONDE_FAR: AtomicU64 = AtomicU64::new(0);
+/// Latched ESR alongside the FAR (for the EC in the report line).
+#[cfg(feature = "selftest")]
+static GUARD_SONDE_ESR: AtomicU64 = AtomicU64::new(0);
+
+/// Prepare the probe: two pages in GiB 1, guard the first. Returns the
+/// guard address. `None` = cannot probe (no guards on this arch, no room
+/// in GiB 1, pool exhausted) — the verdict then reports NOT ARMED instead
+/// of passing silently.
+///
+/// The region is deliberately never freed (selftest): the evidence — a
+/// standing guard at a known address — must survive until the report, and
+/// freeing would need `guard_remap` + `free_region` exactly there. One
+/// leaked page, allocated before any baseline is taken.
+#[cfg(feature = "selftest")]
+pub fn guard_sonde_vorbereiten() -> Option<u64> {
+    if !hal::mmu::guard_unterstuetzt() {
+        return None;
+    }
+    let base = alloc_in_window(
+        2 * caprock_mem::PAGE,
+        caprock_mem::PAGE,
+        hal::mmu::USER_RAM_MIN,
+        hal::mmu::GIB1_END,
+    )?
+    .base();
+    if !hal::mmu::guard_unmap(base) {
+        return None;
+    }
+    // Read back, don't recompute: the guard must provably stand.
+    if !hal::mmu::ist_wache(base) {
+        let _ = hal::mmu::guard_remap(base);
+        return None;
+    }
+    Some(base)
+}
+
+/// Arm the probe after spawning: `tid_raw` is the probe thread's raw id.
+#[cfg(feature = "selftest")]
+pub fn guard_sonde_arm(addr: u64, tid_raw: u64) {
+    GUARD_SONDE_ADDR.store(addr, Ordering::Relaxed);
+    GUARD_SONDE_TID.store(tid_raw, Ordering::Relaxed);
+}
+
+/// Record a faulting thread for the probe. First fault wins (see above).
+#[cfg(feature = "selftest")]
+fn guard_sonde_merken(tid_raw: u64, esr: u64, far: u64) {
+    if tid_raw == GUARD_SONDE_TID.load(Ordering::Relaxed) {
+        GUARD_SONDE_FAR
+            .compare_exchange(0, far, Ordering::Relaxed, Ordering::Relaxed)
+            .ok();
+        GUARD_SONDE_ESR
+            .compare_exchange(0, esr, Ordering::Relaxed, Ordering::Relaxed)
+            .ok();
+    }
+}
+#[cfg(not(feature = "selftest"))]
+#[inline]
+fn guard_sonde_merken(_tid_raw: u64, _esr: u64, _far: u64) {}
+
+/// The probe verdict: `(expected guard, latched FAR, latched EC, ok)`.
+/// Pure over the latched statics, so `all_done()` and the report read the
+/// same reality (no measure-twice drift). `ok` is false until a fault at
+/// exactly the guard address is latched — including when the probe never
+/// ran (expected == 0): an unarmed probe fails, it does not pass.
+#[cfg(feature = "selftest")]
+pub fn guard_sonde_urteil() -> (u64, u64, u64, bool) {
+    let erwartet = GUARD_SONDE_ADDR.load(Ordering::Relaxed);
+    let far = GUARD_SONDE_FAR.load(Ordering::Relaxed);
+    let ec = (GUARD_SONDE_ESR.load(Ordering::Relaxed) >> 26) & 0x3f;
+    (erwartet, far, ec, erwartet != 0 && far == erwartet)
+}
+
 /// **Z26/A3: wie oft ist ein Fault an eine Persönlichkeits-PD gegangen** (statt den Thread zu
 /// beenden)? Die **Sprechprobe** der Fault-Weiche: ein Prüfer, der meldet „kein Gast ist am
 /// nativen Fault-Pfad gestorben", muss belegen können, dass überhaupt umgeleitet wurde.
@@ -2006,6 +2098,8 @@ fn el0_fault(frame: *mut TrapFrame, esr: u64, far: u64) -> *mut TrapFrame {
         sync_thread_state(core, &sched);
         (next, tid)
     }; // SCHEDS freigegeben
+    // Strand-7 guard probe: latch the probe thread's FAR (first fault wins).
+    guard_sonde_merken(tid.to_raw(), esr, far);
     purge_ipc_queues(tid); // eager: faultenden Thread aus allen IPC-Queues entfernen
     reclaim_user_kstack(tid, "el0_fault"); // EL0-Kernel-Stack-Pool-Slot zurückgeben (KSTACKS allein)
     // War es eine isolierte PD, ihre VSpace abbauen. Sicher: `sync_vspace` oben hat

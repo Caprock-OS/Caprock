@@ -12,6 +12,7 @@ pub mod cpu;
 pub mod exception;
 pub mod fp;
 pub mod gic;
+pub mod guard;
 pub mod iommu;
 pub mod mmu;
 pub mod pcie;

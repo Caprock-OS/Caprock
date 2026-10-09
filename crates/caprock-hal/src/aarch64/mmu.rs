@@ -21,6 +21,10 @@
 //! Sämtliches `unsafe` hier ist MMU-/Registerinitialisierung — erlaubte Domäne.
 
 use super::cpu;
+use super::guard::{ADDR_MASK, ONE_GIB, PAGE, RAM_BASE, TWO_MIB};
+/// Re-exported from the host-testable [`super::guard`] module (single source
+/// for the guard arithmetic); the range comments live there.
+pub use super::guard::{GIB1_END, USER_RAM_MIN};
 use core::arch::asm;
 use core::cell::UnsafeCell;
 
@@ -38,6 +42,10 @@ extern "C" {
 /// 4-KiB-ausgerichtete Übersetzungstabelle (512 × 64-bit Deskriptoren).
 #[repr(C, align(4096))]
 struct PageTable([u64; 512]);
+
+impl PageTable {
+    const EMPTY: PageTable = PageTable([0; 512]);
+}
 
 /// Sync-Wrapper, damit Tabellen `static` sein können. Schreibzugriff erfolgt nur
 /// einmalig durch den Primärkern (vor SMP-Start); danach effektiv read-only.
@@ -65,13 +73,6 @@ const ATTR_NORMAL_NC: u64 = 2 << 2; // MAIR-Index 2 (Normal Non-Cacheable, ext-2
 const NG: u64 = 1 << 11; //       non-global: Eintrag ist ASID-spezifisch
 const PXN: u64 = 1 << 53; //      Privileged Execute Never
 const UXN: u64 = 1 << 54; //      Unprivileged Execute Never
-
-const PAGE: u64 = 4096;
-const TWO_MIB: u64 = 2 * 1024 * 1024;
-const ONE_GIB: u64 = 1 << 30;
-const RAM_BASE: u64 = 0x4000_0000;
-/// Ausgabe-Adressbits eines Tabellen-/Seiten-Deskriptors (Bits 47:12).
-const ADDR_MASK: u64 = 0x0000_ffff_ffff_f000;
 
 /// Zugriffsrecht einer gemappten User-Seite (4 KiB) in einer isolierten VSpace.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -316,15 +317,6 @@ pub fn kernel_end() -> u64 {
     // SAFETY: reine Adressberechnung über ein Linker-Symbol.
     unsafe { sym(&__kernel_end) }
 }
-
-/// Mindest-Basis für **User**-RAM: 2 MiB ab RAM-Anfang. Die ersten 2 MiB sind die
-/// geteilte Kernel-L3 (Kernelimage + `.user_text`, von jeder VSpace genutzt) und
-/// enthalten kein EL0-zugängliches freies RAM. Der Allokator beginnt hier.
-pub const USER_RAM_MIN: u64 = RAM_BASE + TWO_MIB;
-
-/// Ende von GiB 1 (RAM-Anfang + 1 GiB). Die private User-Region einer isolierten
-/// VSpace muss in `[USER_RAM_MIN, GIB1_END)` liegen (die per-PD-L2 deckt GiB 1 ab).
-pub const GIB1_END: u64 = RAM_BASE + ONE_GIB;
 
 /// **Obergrenze der bevorzugten Allokationszone** (E-Rest 3b).
 ///
@@ -1258,64 +1250,297 @@ pub fn flush_va_global(va: u64) {
 }
 
 // ==============================================================================================
-// GUARD-PAGES: auf aarch64 NICHT GEBAUT -- und das wird GEZAEHLT, nicht verschwiegen
+// Guard pages for EL1 (kernel) stacks
 // ==============================================================================================
 //
-// Auf x86 liegt seit dem 2026-08-10 unter jedem EL0-Kernel-Stack eine nicht abgebildete Seite
-// (`mmu::guard_unmap`). Der Grund ist eine Messung: der tiefste Kernelpfad benutzte **73 %** des
-// 16-KiB-Stacks, und ein Ueberlauf schrieb still in den Nachbarn -- aus Ring 3 erreichbar, also
-// eine Privilegieneskalation.
+// Since 2026-08-10 the EL0 kernel stack of every user thread carries an
+// unmapped page below it (`guard_unmap`): a stack overflow faults instead of
+// silently writing into the neighbor — reachable from EL0, hence a privilege
+// escalation, not a diagnostics question. On aarch64 this used to be a
+// counter (`guard_unterstuetzt() == false`); this section is the real mapping,
+// built on the x86 pattern (`hal/src/x86_64/mmu.rs`, guard section).
 //
-// **Auf aarch64 gibt es das nicht.** Nicht, weil es hier nicht noetig waere -- die Lage ist
-// dieselbe --, sondern weil die Aufteilung eines Blocks in 4-KiB-Seiten hier noch niemand gebaut
-// hat. Das ist ein offener Punkt und keine Eigenschaft der Architektur.
+// A guard must be missing from the **identity map**, because that is how the
+// kernel reaches its own stack. Kernel stacks come from `mem_alloc`, whose
+// free list starts at 2 MiB — above the 4 KiB-granular kernel L3 — where the
+// map runs in **2 MiB blocks**. Carving a 4 KiB hole therefore means
+// splitting the block into a page table: 512 entries mirroring the block,
+// the L2 entry repointed at the table, TLB flushed. Afterwards the same
+// block is 4 KiB-granular and every further guard in it costs one entry.
 //
-// **Warum diese Datei trotzdem `true` zurueckgibt.** Fail-closed waere hier fail-*alles*: der
-// Kernel koennte keinen einzigen EL0-Thread mehr anlegen. Die ehrliche Fassung ist deshalb nicht
-// „abweisen" und schon gar nicht „stillschweigend durchlassen", sondern **durchlassen und
-// zaehlen**: [`unbewachte_stacks`] steht im Bericht, und solange die Zahl > 0 ist, sagt sie, dass
-// auf dieser Architektur jeder Kernel-Stack ohne Wache laeuft.
+// The pool is **fixed**: the HAL has no allocator (kernel boundary), so
+// `GUARD_L3` holds `GUARD_SLOTS` split blocks. When it runs out,
+// `guard_unmap` returns `false` and the caller refuses the stack request by
+// name (`MANGEL_GUARD_TABELLE`). Fail-closed: a silently unguarded stack
+// would be exactly the failure this function guards against.
 //
-// Der Fehler, der hierher gehoert: die x86-Arbeit hat den aarch64-Bau **gerissen**, und die
-// Abnahme-Reihe hat es nicht gesehen, weil sie nur x86 faehrt. Eine Reihe, die eine Architektur
-// auslaesst, laesst sie verrotten.
+// Scope: GiB 1 only. Splitting a 1 GiB L1 block (GiB 2..8) would need a
+// second split level (a static L2 pool on top of the L3 pool); stacks above
+// GiB 1 are refused by name instead of guarded approximately. At suite scale
+// every stack lands in GiB 1 (free RAM starts at 2 MiB and the suite needs
+// tens of MiB of stacks), so the bound never fires there — but it is a
+// bound, documented here rather than discovered in a log.
+//
+// TLB discipline: the split repoints a live L2 entry, so every cached
+// translation below that block is stale — a full inner-shareable EL1
+// invalidate (`flush_all_is`), once per split. Setting/clearing a single
+// guard entry invalidates that VA across all ASIDs (`flush_va_global`):
+// the same VA hits a globally-tagged kernel block, which a per-ASID flush
+// would not evict.
+//
+// SMP discipline: slot claiming is a compare-exchange to an in-progress
+// marker (`SLOT_READING`); the block number is published last, so lookups
+// (`Acquire`) only ever see completed splits. Stack allocation runs on all
+// cores, so two cores may split different blocks concurrently; the loser
+// retries and finds the winner's slot. Fill-then-publish: the L3 is
+// completed before the L2 entry points at it.
+//
+// Color interplay (C9e): a guard page carries no data and therefore occupies
+// no cache set. The colored stack path already requests it with a one-page
+// lead (`Vorspann`) exempt from the color condition
+// (`alloc_colored_vorspann`); forcing the guard into the stripe made every
+// colored stack request on 16-color ARM structurally unsatisfiable (5
+// consecutive pages against a 4-color stripe). Nothing is weakened by the
+// exemption — the color guarantee says nothing about a page that is never
+// read or written.
 
-use core::sync::atomic::{AtomicUsize, Ordering as GuardOrdering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-/// Wie viele Kernel-Stacks ohne Wache angelegt wurden (auf aarch64: alle).
+/// How many 2 MiB blocks can be split for guards. Same derivation as the
+/// x86 `GUARD_BLOCKS`: a 16 KiB stack plus guard occupies 20 KiB, so one
+/// block holds ~100 guarded stacks and 16 blocks hold ~1600 — far above a
+/// suite run, below 10 000 threads (the structural answer to that is a
+/// stack arena, not a bigger constant).
+const GUARD_SLOTS: usize = 16;
+
+/// Split L3 tables, one per slot. Written once at split time
+/// (fill-then-publish), then only single entries are flipped.
+static mut GUARD_L3: [PageTable; GUARD_SLOTS] = [const { PageTable::EMPTY }; GUARD_SLOTS];
+
+/// Which 2 MiB block slot `k` carries (`usize::MAX` = free). Claimed by
+/// compare-exchange; see [`guard_slot`].
+static GUARD_BLOCK_OF: [AtomicUsize; GUARD_SLOTS] =
+    [const { AtomicUsize::new(usize::MAX) }; GUARD_SLOTS];
+
+/// The original L2 block descriptor per slot, stored at split time. The
+/// source the mirror pages — and any later [`guard_remap`] — are derived
+/// from, never a hardcoded constant.
+static GUARD_BLOCK_DESC: [AtomicU64; GUARD_SLOTS] =
+    [const { AtomicU64::new(0) }; GUARD_SLOTS];
+
+/// Guards currently standing (report/balance).
+static GUARDS_LIVE: AtomicUsize = AtomicUsize::new(0);
+/// Guards set in total (speaking probe: 0 means "never used").
+static GUARDS_TOTAL: AtomicUsize = AtomicUsize::new(0);
+/// How often a guard could **not** be set (pool exhausted / out of range).
+static GUARDS_DENIED: AtomicUsize = AtomicUsize::new(0);
+
+/// Unguarded stacks allocated while guards were unsupported. Permanently 0
+/// since real guards landed; kept because the kernel's fallback path still
+/// reports through it on architectures without guards (x86 reports 0 too).
 static UNBEWACHT: AtomicUsize = AtomicUsize::new(0);
 
-/// **Kann diese Architektur Guard-Pages?** Der Aufrufer entscheidet danach, ob ein Fehlschlag
-/// „Vorrat leer" (abweisen) oder „hier gibt es das nicht" (zaehlen und weitermachen) heisst.
+/// Full inner-shareable EL1 TLB invalidate. For the split path, where a
+/// live L2 entry is repointed and every cached translation below it is
+/// stale. Guard set/clear touch one VA and use [`flush_va_global`].
+fn flush_all_is() {
+    // SAFETY: TLB maintenance only, with barriers; no memory effect.
+    unsafe {
+        asm!(
+            "dsb ishst",
+            "tlbi vmalle1is",
+            "dsb ish",
+            "isb",
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
+/// Marker for a slot whose split is in progress (claimed, not yet
+/// published). Never equals a block number, so the reuse check cannot hit a
+/// half-filled table.
+const SLOT_READING: usize = usize::MAX - 1;
+
+/// Make the 2 MiB block of `pa` 4 KiB-granular; return its `GUARD_L3` slot.
+///
+/// Reuses the slot when the block is already split — the second stack in
+/// the same block costs no second table. `None` when `pa` is outside the
+/// guard range, when the L2 entry is not a plain block, or when the pool is
+/// exhausted.
+///
+/// Concurrency: the claim is a compare-exchange to `SLOT_READING`, and the
+/// block number is published (`Release`) only after the table is filled and
+/// the L2 entry repoints at it (fill-then-publish). Lookups use `Acquire`
+/// loads, so they only ever see completed splits. A core that loses a claim
+/// retries: the winner publishes within microseconds (straight-line code,
+/// no locks, no allocation), so the loop always terminates.
+fn guard_slot(pa: u64) -> Option<usize> {
+    let blk = super::guard::block_of(pa)? as usize;
+    loop {
+        // Published split of this block?
+        if let Some(k) = GUARD_BLOCK_OF
+            .iter()
+            .position(|b| b.load(Ordering::Acquire) == blk)
+        {
+            return Some(k);
+        }
+        // Claim a free slot for the split.
+        let Some(k) = GUARD_BLOCK_OF
+            .iter()
+            .position(|b| b.load(Ordering::Relaxed) == usize::MAX)
+        else {
+            return None; // pool exhausted (or all mid-split; caller refuses)
+        };
+        if GUARD_BLOCK_OF[k]
+            .compare_exchange(usize::MAX, SLOT_READING, Ordering::AcqRel, Ordering::Relaxed)
+            .is_err()
+        {
+            continue; // lost the race — retry (reuse check first)
+        }
+        // Won the slot: mirror the block into the L3 **before** publishing.
+        // SAFETY: slot `k` is ours alone (just claimed); the L2 table is the
+        // kernel's own identity-mapped static; `blk` is range-checked above.
+        let l2 = table_mut(&L2_TABLE);
+        let old = l2[blk];
+        if old & 0b11 != super::guard::BLOCK_KIND {
+            // Not a plain block (unmapped, or a table — unreachable through
+            // the reuse check): release the claim and refuse.
+            GUARD_BLOCK_OF[k].store(usize::MAX, Ordering::Release);
+            return None;
+        }
+        let base = RAM_BASE + blk as u64 * TWO_MIB;
+        // SAFETY: claimed, 4 KiB-aligned static table; index < 512.
+        unsafe {
+            let tables = &mut *core::ptr::addr_of_mut!(GUARD_L3);
+            for (j, e) in tables[k].0.iter_mut().enumerate() {
+                *e = super::guard::split_page(old, base + j as u64 * PAGE);
+            }
+            l2[blk] = table_desc(core::ptr::addr_of!(tables[k]) as u64);
+        }
+        GUARD_BLOCK_DESC[k].store(old, Ordering::Relaxed);
+        cpu::dsb_sy();
+        flush_all_is();
+        GUARD_BLOCK_OF[k].store(blk, Ordering::Release);
+        return Some(k);
+    }
+}
+
+/// **Whether this architecture does guard pages.** The caller uses it to
+/// tell "pool empty" (refuse) from "unsupported here" (count and continue).
 pub fn guard_unterstuetzt() -> bool {
-    false
-}
-
-/// Auf aarch64 ein No-Op mit Zaehler -- s. Modulabschnitt oben.
-pub fn guard_unmap(_pa: u64) -> bool {
-    UNBEWACHT.fetch_add(1, GuardOrdering::Relaxed);
     true
 }
 
-/// Gegenstueck zu [`guard_unmap`]; hier ebenfalls ein No-Op.
-pub fn guard_remap(_pa: u64) -> bool {
-    UNBEWACHT.fetch_sub(1, GuardOrdering::Relaxed);
+/// **Set a guard**: remove the 4 KiB page at `pa` from the identity map.
+///
+/// `false` means "could not" — the caller must then **refuse** the request.
+/// A silently unguarded stack would be exactly the state this function
+/// prevents.
+pub fn guard_unmap(pa: u64) -> bool {
+    if pa % PAGE != 0 {
+        return false;
+    }
+    let Some(k) = guard_slot(pa) else {
+        GUARDS_DENIED.fetch_add(1, Ordering::Relaxed);
+        return false;
+    };
+    let idx = super::guard::page_index(pa);
+    // SAFETY: table and index just derived; one 64-bit store, then TLB flush.
+    unsafe {
+        let tables = &mut *core::ptr::addr_of_mut!(GUARD_L3);
+        tables[k].0[idx] = 0; // invalid -> every access faults
+    }
+    flush_va_global(pa);
+    GUARDS_LIVE.fetch_add(1, Ordering::Relaxed);
+    GUARDS_TOTAL.fetch_add(1, Ordering::Relaxed);
     true
 }
 
-/// Wie viele Stacks zurzeit ohne Wache laufen.
+/// Lift a guard again (when freeing the stack — otherwise the allocator
+/// would hand out a page nobody can reach).
+pub fn guard_remap(pa: u64) -> bool {
+    if pa % PAGE != 0 {
+        return false;
+    }
+    let Some(blk) = super::guard::block_of(pa) else {
+        return false;
+    };
+    let Some(k) = GUARD_BLOCK_OF
+        .iter()
+        .position(|b| b.load(Ordering::Acquire) == blk as usize)
+    else {
+        return false;
+    };
+    // The rights come from the stored block descriptor — the same source
+    // the split used. A neighbor entry would do (a guard never fills a
+    // whole table), but the stored source cannot be another guard.
+    let entry = super::guard::split_page(GUARD_BLOCK_DESC[k].load(Ordering::Relaxed), pa);
+    let idx = super::guard::page_index(pa);
+    // SAFETY: as in `guard_unmap`.
+    unsafe {
+        let tables = &mut *core::ptr::addr_of_mut!(GUARD_L3);
+        tables[k].0[idx] = entry;
+    }
+    flush_va_global(pa);
+    GUARDS_LIVE.fetch_sub(1, Ordering::Relaxed);
+    true
+}
+
+/// How many stacks currently run without a guard (0: all guarded).
 pub fn unbewachte_stacks() -> usize {
-    UNBEWACHT.load(GuardOrdering::Relaxed)
+    UNBEWACHT.load(Ordering::Relaxed)
 }
 
-/// `(stehend, gesetzt, abgewiesen, belegte Bloecke, Blockvorrat)` -- hier durchgehend 0, weil es
-/// keine Wachen gibt. Die Zahl, die auf dieser Architektur etwas sagt, ist
-/// [`unbewachte_stacks`].
+/// `(standing guards, total set, refused, occupied blocks, block pool)`.
 pub fn guard_stats() -> (usize, usize, usize, usize, usize) {
-    (0, 0, 0, 0, 0)
+    let belegt = GUARD_BLOCK_OF
+        .iter()
+        .filter(|b| {
+            let v = b.load(Ordering::Relaxed);
+            v != usize::MAX && v != SLOT_READING
+        })
+        .count();
+    (
+        GUARDS_LIVE.load(Ordering::Relaxed),
+        GUARDS_TOTAL.load(Ordering::Relaxed),
+        GUARDS_DENIED.load(Ordering::Relaxed),
+        belegt,
+        GUARD_SLOTS,
+    )
 }
 
-/// Auf aarch64 gibt es keine Wachen, also liegt keine Adresse auf einer.
-pub fn ist_wache(_pa: u64) -> bool {
-    false
+/// **Is `pa` currently a standing guard?** — read, not computed.
+pub fn ist_wache(pa: u64) -> bool {
+    let Some(blk) = super::guard::block_of(pa) else {
+        return false;
+    };
+    let Some(k) = GUARD_BLOCK_OF
+        .iter()
+        .position(|b| b.load(Ordering::Acquire) == blk as usize)
+    else {
+        return false;
+    };
+    let idx = super::guard::page_index(pa);
+    // SAFETY: static table, occupied slot, derived index — read-only.
+    unsafe { super::guard::is_invalid((*core::ptr::addr_of!(GUARD_L3))[k].0[idx]) }
+}
+
+/// **The address of ONE currently standing guard** — or `None` when none
+/// stands. For probes that must touch a page provably unmapped (the x86
+/// `#DF` probe reads its guard instead of computing one from `TSS.rsp0`).
+pub fn erste_lebende_wache() -> Option<u64> {
+    for (k, b) in GUARD_BLOCK_OF.iter().enumerate() {
+        let blk = b.load(Ordering::Acquire);
+        if blk == usize::MAX || blk == SLOT_READING {
+            continue;
+        }
+        // SAFETY: static table, occupied slot (just read); read-only.
+        let tables = unsafe { &*core::ptr::addr_of!(GUARD_L3) };
+        for (i, e) in tables[k].0.iter().enumerate() {
+            if super::guard::is_invalid(*e) {
+                return Some(blk as u64 * TWO_MIB + RAM_BASE + i as u64 * PAGE);
+            }
+        }
+    }
+    None
 }
