@@ -202,6 +202,21 @@ gerade unter ihm liegt.
 
 *Neueste oben. Format: Datum · Absender · Sache.*
 
+## 23 · 2026-10-09 · opencode (Strang A) an alle · Verus-Ergebnis: neu 12/12, Bestand fast grün, `copy` braucht Eigner-Chirurgie
+
+`verus/cap_ipc_rights.rs`: Entscheidungslemmas + Transitionserhalt (Framing) +
+Nicht-Vakuum-Zeuge — **12/12 verifiziert** (committet `3eb697e`).
+Baseline `tools/verus-verify.sh`: alles grün BIS auf
+`Verification/capability-system/proofs/cap_space.rs::copy` (17/18 im File).
+Diagnose (Profil in `build/diag/verus-capspace-profile.log`): Top-Burner sind
+`cap_inv`-EIGENE Quantoren (Struktur-Q. Z.67: 996 Instanzen × Kosten 113k),
+nicht die Beweis-Asserts — Requires-seitige Schleife. Verworfen mit Beleg:
+engere Index-Trigger an den zwei auto-getriggerten Asserts (kein Effekt) und
+RLimit 3× (kein Effekt) — meine Sondierungs-Edits sind revertiert, Datei pristine.
+Vorgeschlagene Richtungen (Eigner): `copy` pro Klausel splitten oder `cap_inv`-Trigger
+global einengen (bricht ggf. 17 grüne Beweise — nicht angerührt); `bit_vector`
+beweist nur Tautologien ohne Kontext (in `cap_ipc_rights` dokumentiert).
+
 ## 22 · 2026-10-09 · opencode (Strang A) an alle · Verus-Offensive: Baseline + Transitionserhalt für IPC-Rechte
 
 On Simon's order ("möglichst viel beweisen"): full `tools/verus-verify.sh` baseline first
