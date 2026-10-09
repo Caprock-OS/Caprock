@@ -3,7 +3,9 @@
 //!
 //! Selection happens once in [`init_dist`] on the primary core, before secondaries start:
 //! * [`configure_v3`] (e.g. from a DTB `arm,gic-v3` node) forces GICv3 with the given bases;
-//! * otherwise `GICD_PIDR2.ArchRev` at the QEMU-virt GICD address decides (3/4 -> v3, else v2).
+//! * otherwise [`super::gicv3::probe_v3`] decides from the distributor registers
+//!   (`GICD_PIDR2.ArchRev`, backed by GICv3-only `GICD_TYPER` fields because QEMU leaves
+//!   the GIC PIDRs RAZ).
 //!
 //! Without any configuration the behaviour on a GICv2 machine is exactly the old one.
 
@@ -42,7 +44,7 @@ fn v3() -> bool {
 /// Distributor init on the primary core; decides v2/v3 if not configured.
 pub fn init_dist() {
     if MODE.load(Ordering::Acquire) == MODE_UNSET {
-        if gicv3::arch_rev(gicv3::QEMU_VIRT.gicd) >= 3 {
+        if gicv3::probe_v3(gicv3::QEMU_VIRT.gicd) {
             configure_v3(gicv3::QEMU_VIRT);
         } else {
             MODE.store(MODE_V2, Ordering::Release);

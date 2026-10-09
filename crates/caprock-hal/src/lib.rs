@@ -15,16 +15,17 @@
 //!
 //! ```text
 //!   caprock-hal
-//!    ├── aarch64/   console cpu exception fp intc(GICv2) mmu power(PSCI) timer syscall
+//!    ├── aarch64/   console cpu exception fp intc(GICv2/GICv3, selected at boot) mmu power(PSCI) timer syscall
 //!    │              + pcie smmu virtio   (ARM-/QEMU-`virt`-spezifisch, ext-22..24)
 //!    └── x86_64/    console cpu exception fp intc(LAPIC)  mmu power       timer syscall
 //! ```
 //!
 //! ### Namen
 //!
-//! Die Modulnamen sind **arch-neutral**: `intc` (Interrupt-Controller: GICv2 bzw. LAPIC),
-//! `power` (PSCI bzw. ACPI-/QEMU-Abschaltung + SMP-Start). Auf aarch64 bleiben `gic`/`psci`
-//! zusätzlich als Alias sichtbar, damit ARM-spezifischer Gerätecode unverändert bleibt.
+//! Die Modulnamen sind **arch-neutral**: `intc` (Interrupt-Controller: GICv2/GICv3
+//! bzw. LAPIC), `power` (PSCI bzw. ACPI-/QEMU-Abschaltung + SMP-Start). Auf aarch64
+//! bleiben `gic`/`gicv3`/`psci` zusätzlich sichtbar, damit ARM-spezifischer Gerätecode
+//! unverändert bleibt.
 //!
 //! ### Was der x86_64-Port (noch) nicht hat
 //!

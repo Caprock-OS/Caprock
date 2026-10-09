@@ -76,7 +76,30 @@ const TYPER_LAST: u64 = 1 << 4;
 const SPURIOUS_MIN: u32 = 1020;
 const DEFAULT_PRIO: u8 = 0x80;
 
+/// Detect a GICv3+ distributor at `gicd`.
+///
+/// Two independent signals, either one selects v3:
+/// * `GICD_PIDR2.ArchRev >= 3` — the architected ID (real GICv3/v4 hardware).
+/// * Any GICv3-only `GICD_TYPER` field set (bits [26:16]: RSS, No1N, A3V, IDbits, LPIS,
+///   MBIS — all RES0 on GICv2). QEMU leaves the GIC PIDRs RAZ, so on QEMU this is the
+///   only visible v3 signature; on real hardware the PIDR decides and this is backup.
+///
+/// A missing/unmapped GIC reads RAZ (all zero) and selects v2, which then faults loudly
+/// on the absent GICv2 CPU interface instead of silently driving the wrong driver.
+pub fn probe_v3(gicd: usize) -> bool {
+    // SAFETY: MMIO reads of GICD ID/type registers in the device-mapped page.
+    let pidr2 = unsafe { read_volatile((gicd + GICD_PIDR2) as *const u32) };
+    if ((pidr2 >> 4) & 0xf) >= 3 {
+        return true;
+    }
+    let typer = unsafe { read_volatile((gicd + GICD_TYPER) as *const u32) };
+    typer & 0x07ff_0000 != 0
+}
+
 /// `GICD_PIDR2.ArchRev` of the GIC at `gicd`: 2 = GICv2, 3 = GICv3, 4 = GICv4.
+///
+/// NOTE: QEMU leaves the GIC PIDR ID registers RAZ (measured: PIDR0..PIDR3 read 0 on
+/// `virt,gic-version=3`), so this alone cannot detect a QEMU GICv3. See [`probe_v3`].
 pub fn arch_rev(gicd: usize) -> u32 {
     // SAFETY: MMIO read of an ID register in the device-mapped GIC distributor page.
     let pidr2 = unsafe { read_volatile((gicd + GICD_PIDR2) as *const u32) };
@@ -256,8 +279,16 @@ pub fn route_spi(intid: u32, target_core: usize) {
     let a = if a == UNSET { (AFF[0].load(Ordering::Acquire) & !0xff) | (target_core as u64 & 0xff) } else { a };
     // IROUTER: Aff3[39:32] Aff2[23:16] Aff1[15:8] Aff0[7:0].
     let r = ((a >> 24) & 0xff) << 32 | (a & 0x00ff_ffff);
+    // GICD_IROUTER<n> routes SPI n = INTID 32+n, so the array index is `intid - 32`.
+    // Same guard as the GICv2 path: PPI/SGI are banked per core and have no IROUTER
+    // entry — without it `intid - 32` underflows (release has no overflow checks)
+    // into a wild 64-bit MMIO write (S3 class).
+    if intid < 32 {
+        return;
+    }
+    let idx = intid - 32;
     // SAFETY: 64-bit MMIO in the GICD IROUTER array (device memory).
-    unsafe { write_volatile((gicd() + GICD_IROUTER + 8 * intid as usize) as *mut u64, r) };
+    unsafe { write_volatile((gicd() + GICD_IROUTER + 8 * idx as usize) as *mut u64, r) };
 }
 
 /// Send SGI `intid` (0..15) to `target_core` via `ICC_SGI1R_EL1`.

@@ -1,10 +1,14 @@
-//! **aarch64-Implementierung** der HAL (QEMU `virt`, GICv2, PSCI).
+//! **aarch64-Implementierung** der HAL (QEMU `virt`, GICv2/GICv3, PSCI).
 //!
 //! Die Module hier hießen bis ext-30 direkt `caprock_hal::*`; sie sind unverändert und
 //! werden von [`crate`] per `cfg(target_arch)` ausgewählt. Arch-neutrale Namen (`intc`,
 //! `power`) sind Aliase auf die ARM-Bezeichnungen (`gic`, `psci`) — so bleibt der
 //! ARM-spezifische Gerätecode (SMMU/PCIe) lesbar, während der Kernel-Kern nur die neutrale
 //! API sieht.
+//!
+//! Interrupt controllers: [`intc`] selects at boot between the [`gic`] (GICv2) driver and
+//! the [`gicv3`] driver (distributor + per-core redistributors + `ICC_*` system-register
+//! CPU interface). No ITS (see `gicv3` docs).
 
 pub mod cache;
 pub mod console;

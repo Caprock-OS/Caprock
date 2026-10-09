@@ -2,8 +2,8 @@
 //!
 //! Bewusst **nur GICv2, kein GICv3/ITS**: MSI läuft hier über die ITS-Doorbell als
 //! gewöhnliche übersetzte Adresse (s. `iommu::interrupt_message_window` = `None`),
-//! ein ITS-Treiber ist Non-Goal. Wer GICv3/ITS braucht, baut ein neues Modul —
-//! kein `cfg` in dieser Datei.
+//! ein ITS-Treiber ist Non-Goal. The GICv3 driver lives next to this file (`gicv3.rs`);
+//! [`super::intc`] selects between the two at boot — kein `cfg` in dieser Datei.
 //!
 //! GICD (Distributor) @ 0x0800_0000, GICC (CPU-Interface) @ 0x0801_0000.
 //! Diese Region ist als Device-Memory gemappt (MMU, ADR 0002), daher sind die
