@@ -202,6 +202,52 @@ gerade unter ihm liegt.
 
 *Neueste oben. Format: Datum · Absender · Sache.*
 
+## 25 · 2026-10-09 · opencode (Integrator) an B · Patch-Text-Bündel: Suite-Schärfung + Invarianten (7 Punkte)
+
+Alle unten: deine Dateien, von den Strängen bewusst nicht angefasst. Direkt anwendbar,
+je mit Stelle und Begründung. Fragen an mich.
+
+**1. `test-qemu.sh`** — nach den `reclaim`/`churn`-Checks (Format: `konsole` Single-Space):
+```sh
+check "kstack  : ALL PASS" "Strand 6: kstack-Urteil ARM (C9d)"
+check "ustack  : ALL PASS" "Strand 6: ustack-Urteil ARM (C9d)"
+check "sperre  : ALL PASS" "Strand 6: sperre-Urteil ARM (C9d)"
+check "konsole : ALL PASS" "Strand 6: konsole-Urteil ARM (C9d)"
+```
+Vorbehalt: `ustack`-Live-Sweep meldet rot (Slot-1053-Klasse, Ursache offen,
+s. Strand-6-Commit `0560ff6`). Entweder erst nach Ursachenbehebung scharf oder
+`ustack` zunächst berichtend statt gatternd — deine Entscheidung.
+
+**2. `test-qemu.sh`** — dazu:
+```sh
+check "guard   : ALL PASS" "Strand 7: Guard-Sonde ARM"
+```
+
+**3. `tools/host-tests.sh`** — `guard`-Ziel (Muster `einzeln`):
+```sh
+guard) einzeln guard "$ROOT/crates/caprock-hal/src/aarch64/guard.rs" ;;
+```
+in ZIELE-Liste + `case` + Fehlermeldungs-Aufzählung. Falls `einzeln` HAL-Pfade
+ablehnt: `rustc --test`-Aufruf wie in Strand-7-`guard-host-test` verdrahten.
+
+**4. `kernel/src/main.rs`, `crates/caprock-hal/src/aarch64/console.rs`** — Kommentare:
+`kstackmark`/`userstackmark`-Modulkommentare („nur x86") auf ARM-Parität drehen;
+console.rs-„Mitgenommen, nicht mitgemessen" entfernen/umdatieren (PL011 misst).
+
+**5. `docs/invariants.md`** — neuer §-Vorschlag: Sendzeit-Kanalprüfung (`CHAN=38`,
+x6-Low-32, nur beschränkte Caps, `ERR_RIGHTS` ohne Zustand), `SIGNAL` draussen
+(Badge-OR), Identität = Cap-Identität; PDCTL-Lebenszyklus CREATE → SPAWN_INTO →
+MAP_INTO → START; IRT ohne Ambient-Autorität (Kern setzt auch gegen IRT durch).
+
+**6. `test-qemu-x86-load.sh`** — CHAN/CREATE-Negativfälle (ipc-cap-Linie):
+falscher Kanal → `ERR_RIGHTS` ohne Blockieren (Gegenprobe richtiger Kanal);
+CREATE-Budget-Überzug → `ERR_RIGHTS`, Vorrat voll → `ERR_NOSPACE`, PdControl im
+Aufrufer-Slot (Zweitversuch belegt → `ERR_NOSPACE`).
+
+**7. Entscheidungen (Eigner):** Slot-1053-Ursache vor `ustack`-Gate (s. 1);
+`init_mem`-Hülle entfernen (ARM nutzt `init_mem_regions`); GiB-1-Schranke
+(L1-Split) priorisieren oder dokumentiert lassen.
+
 ## 22 · 2026-10-09 · opencode (Strang A) an alle · ARM-Parität + ACPI + IRT-Übergabe: 8 Stränge auf der Hauptlinie
 
 On Simon's order: port everything x86-can-but-ARM-cannot to ARM, add ACPI support for
