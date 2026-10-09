@@ -13,8 +13,8 @@
 
 /// "CAPUEFI1" as little-endian ASCII.
 pub const MAGIC: u64 = 0x3149_4645_5550_4143;
-/// Bumped whenever the layout changes.
-pub const VERSION: u32 = 1;
+/// Bumped whenever the layout changes (v2 adds the bootloader-loaded disk-driver span).
+pub const VERSION: u32 = 2;
 /// Memory regions the stub can describe. Adjacent regions of the same kind are merged first.
 pub const MAX_REGIONS: usize = 128;
 
@@ -70,6 +70,9 @@ pub struct UefiHandover {
     pub n_regions: u32,
     pub fb: Framebuffer,
     /// Physical address of the flattened device tree from the EFI configuration table, or 0.
+    /// Together with `rsdp` this is the device description the bootloader-loaded disk driver
+    /// needs at startup (DTB or ACPI, whichever the firmware provides); the kernel passes both
+    /// through unchecked except for the header, parsing happens in the driver PD / IRT.
     pub dtb: u64,
     pub dtb_size: u64,
     /// Physical address of the ACPI RSDP, or 0.
@@ -79,6 +82,13 @@ pub struct UefiHandover {
     pub archive_base: u64,
     /// 0 when no archive was found.
     pub archive_len: u64,
+    /// Disk-driver image loaded by the bootloader alongside the kernel (Simon 2026-10-09:
+    /// what reads the disk cannot live on it). Same mechanism as the archive span: the stub
+    /// places the image inside the reserved loader window and records it here; the kernel
+    /// checks only the bounds and passes the bytes through, parsing happens in the driver PD.
+    /// `driver_len == 0` means "no driver image was provided".
+    pub driver_base: u64,
+    pub driver_len: u64,
     pub regions: [Region; MAX_REGIONS],
 }
 
@@ -109,6 +119,8 @@ impl UefiHandover {
             kernel_size: 0,
             archive_base: 0,
             archive_len: 0,
+            driver_base: 0,
+            driver_len: 0,
             regions: [Region { base: 0, len: 0, kind: 0, _pad: 0 }; MAX_REGIONS],
         }
     }

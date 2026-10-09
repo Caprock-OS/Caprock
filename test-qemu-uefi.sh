@@ -29,6 +29,16 @@ rm -rf "$ESP"; mkdir -p "$ESP/EFI/BOOT" build/diag
 cp "$STUB" "$ESP/EFI/BOOT/BOOTAA64.EFI"
 cp "$ELF" "$ESP/caprock.elf"
 cp build/boot-archive.bin "$ESP/archive.bin"
+# Stand-in disk-driver image (Simon 2026-10-09: the driver travels WITH the bootloader, not on
+# disk). No driver PD exists yet, so this is a deterministic 64 KiB pattern blob with a magic;
+# it exercises the stub load path + handover span end to end (the kernel bounds-checks it and
+# passes it through, no parsing).
+python3 -c "
+import struct
+magic = b'CAPROCK-DRIVER-TEST\x00'
+body = bytes((i * 2654435761 >> 16) & 0xFF for i in range(65536 - len(magic) - 8))
+open('$ESP/driver.bin','wb').write(magic + struct.pack('<I', 65536) + struct.pack('<I', 0x44565231) + body)
+"
 
 MACHINE="virt,iommu=smmuv3"
 [ -n "${EL2:-}" ] && MACHINE="$MACHINE,virtualization=on"
@@ -68,8 +78,11 @@ fi
 chk() { if grep -aq -- "$2" "$LOG"; then echo "ok   : $1"; else echo "FAIL : $1  (missing: $2)"; rc=1; fi; }
 chk "stub started"                 'stub: Caprock aarch64 UEFI stub'
 chk "kernel loaded by stub"        'stub: kernel loaded'
+chk "driver loaded by stub"        'stub: driver [0-9]* bytes at'
 chk "kernel entered via stub"      'uefi   : kernel entered via UEFI stub'
 chk "handover framebuffer read"    'uefi   : fb base='
+chk "driver span in loader window" 'uefi   : driver image'
+chk "device description passed"    'uefi   : devdesc dtb'
 chk "framebuffer read-back"        'uefi   : fb ALL PASS'
 chk "regular boot continues"       'boot: primary core up'
 chk "selftest verdict line"         '== SELFTEST [A-Z]'

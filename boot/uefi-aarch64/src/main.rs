@@ -190,7 +190,7 @@ fn kind_of(ty: MemoryType) -> u32 {
 fn efi_main() -> Status {
     println!("stub: Caprock aarch64 UEFI stub, EL{}", current_el());
 
-    // --- kernel + archive ---------------------------------------------------------------
+    // --- kernel + archive + disk-driver image ---------------------------------------------
     let Some(elf) = read_file(cstr16!("\\caprock.elf")) else {
         println!("stub: FAILED cannot read \\caprock.elf from the boot volume");
         return Status::NOT_FOUND;
@@ -202,27 +202,64 @@ fn efi_main() -> Status {
     drop(elf);
     println!("stub: kernel loaded [{:#x}, {:#x}) entry {:#x}", k.base, k.end, k.entry);
 
+    // --- kernel + archive + disk-driver image ------------------------------------------------
+    // The disk driver comes FROM the bootloader, not from disk (Simon 2026-10-09: what reads the
+    // disk cannot live on it). `\driver.bin` travels on the ESP next to `\caprock.elf` and
+    // `\archive.bin`, is placed page-aligned right after the archive inside the same reserved
+    // window (so the kernel side needs no new reservation), and is recorded in the handover's
+    // driver span. Absent files, an unclaimable window, or no room mean "that cargo is missing",
+    // never a boot failure.
+    let archive_file = read_file(cstr16!("\\archive.bin"));
+    let driver_file = read_file(cstr16!("\\driver.bin"));
     let mut archive_len = 0u64;
-    if let Some(a) = read_file(cstr16!("\\archive.bin")) {
-        if a.len() as u64 <= ARCHIVE_USABLE {
-            let pages = (ARCHIVE_USABLE / PAGE) as usize;
-            match boot::allocate_pages(AllocateType::Address(ARCHIVE_BASE), MemoryType::LOADER_DATA, pages) {
-                Ok(_) => {
-                    unsafe {
-                        ptr::write_bytes(ARCHIVE_BASE as *mut u8, 0, ARCHIVE_USABLE as usize);
+    let mut driver_base = 0u64;
+    let mut driver_len = 0u64;
+    let need_window = archive_file.as_ref().is_some_and(|a| a.len() as u64 <= ARCHIVE_USABLE)
+        || driver_file.is_some();
+    if need_window {
+        let pages = (ARCHIVE_USABLE / PAGE) as usize;
+        match boot::allocate_pages(AllocateType::Address(ARCHIVE_BASE), MemoryType::LOADER_DATA, pages) {
+            Ok(_) => unsafe {
+                ptr::write_bytes(ARCHIVE_BASE as *mut u8, 0, ARCHIVE_USABLE as usize);
+                if let Some(a) = &archive_file {
+                    if a.len() as u64 <= ARCHIVE_USABLE {
                         ptr::copy_nonoverlapping(a.as_ptr(), ARCHIVE_BASE as *mut u8, a.len());
+                        archive_len = a.len() as u64;
+                    } else {
+                        println!(
+                            "stub: archive larger than the {ARCHIVE_USABLE:#x}-byte window; continuing without"
+                        );
                     }
-                    archive_len = a.len() as u64;
+                } else {
+                    println!("stub: no \\archive.bin; continuing without");
                 }
-                Err(e) => println!("stub: archive window {ARCHIVE_BASE:#x} not free ({e:?}); continuing without"),
-            }
-        } else {
-            println!("stub: archive larger than the {ARCHIVE_USABLE:#x}-byte window; continuing without");
+                let archive_end = ARCHIVE_BASE + (archive_len + PAGE - 1) / PAGE * PAGE;
+                if let Some(d) = &driver_file {
+                    let room = ARCHIVE_BASE + ARCHIVE_USABLE - archive_end;
+                    if d.len() as u64 <= room {
+                        ptr::copy_nonoverlapping(d.as_ptr(), archive_end as *mut u8, d.len());
+                        driver_base = archive_end;
+                        driver_len = d.len() as u64;
+                    } else {
+                        println!(
+                            "stub: driver larger than the remaining {room:#x} bytes; continuing without"
+                        );
+                    }
+                } else {
+                    println!("stub: no \\driver.bin; continuing without");
+                }
+            },
+            Err(e) => println!("stub: cargo window {ARCHIVE_BASE:#x} not free ({e:?}); continuing without"),
         }
+    } else if archive_file.is_some() {
+        println!("stub: archive larger than the {ARCHIVE_USABLE:#x}-byte window; continuing without");
     } else {
-        println!("stub: no \\archive.bin; continuing without");
+        println!("stub: no \\archive.bin and no \\driver.bin; continuing without");
     }
     println!("stub: archive {archive_len} bytes at {ARCHIVE_BASE:#x}");
+    if driver_len != 0 {
+        println!("stub: driver {driver_len} bytes at {driver_base:#x}");
+    }
     if archive_len == 0 {
         let mm = boot::memory_map(MemoryType::LOADER_DATA).unwrap();
         for d in mm.entries().filter(|d| d.phys_start >= 0x1_0000_0000 || d.ty == MemoryType::CONVENTIONAL) {
@@ -240,6 +277,8 @@ fn efi_main() -> Status {
     h.kernel_size = k.end - k.base;
     h.archive_base = ARCHIVE_BASE;
     h.archive_len = archive_len;
+    h.driver_base = driver_base;
+    h.driver_len = driver_len;
 
     if let Ok(gh) = boot::get_handle_for_protocol::<GraphicsOutput>() {
         if let Ok(mut gop) = boot::open_protocol_exclusive::<GraphicsOutput>(gh) {
