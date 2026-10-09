@@ -2051,6 +2051,11 @@ pub fn set_hooks() {
 }
 
 /// Freies RAM `[free_base, ram_end)` beim Allokator registrieren.
+///
+/// Kept for the single-span call shape (the thin wrapper over
+/// [`init_mem_regions`]); the aarch64 boot now feeds computed regions, so
+/// this may be uncalled -- that is a call-site fact, not dead design.
+#[allow(dead_code)]
 pub fn init_mem(free_base: u64, ram_end: u64) {
     init_mem_regions(&[(free_base, ram_end - free_base)], ram_end);
 }

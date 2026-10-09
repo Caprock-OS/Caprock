@@ -286,7 +286,47 @@ pub extern "C" fn kernel_main(dtb_addr: u64) -> ! {
     // ext-26: das oberste RAM-Fenster [MOD_BASE, ram_end) ist für das extern geladene Boot-Archiv
     // reserviert (QEMU `-device loader`); der Allokator bekommt es NICHT -> kein Konflikt.
     let alloc_end = ram_end.min(loader::MOD_BASE);
-    system::init_mem(free_base, alloc_end);
+    // Mitteilung 24 (Speicherschutz beim Boot): the allocator source is
+    // usable-minus-reserved, never the raw window. Usable = DTB memory range;
+    // exclusions = low/kernel span + archive window + DTB reserved-memory
+    // regs (all counted on the `memsrc` line). Enforced property: MEM holds
+    // exactly the kept regions, and everything the IRT or a driver maps or
+    // owns is allocated from MEM -- reserved ranges are unreachable to EL0
+    // by construction (no second source exists).
+    let mut excl = [(0u64, 0u64); 2 + crate::handover::HO_MAX_RSVD];
+    excl[0] = (ram_base, free_base.saturating_sub(ram_base));
+    excl[1] = if alloc_end < ram_end {
+        (alloc_end, ram_end - alloc_end)
+    } else {
+        (0, 0)
+    };
+    let mut rsvd = [(0u64, 0u64); crate::handover::HO_MAX_RSVD];
+    let (rsvd_n, rsvd_bad) = crate::handover::dtb_reserved_regs(crate::handover::direct_dtb(), &mut rsvd);
+    let mut i = 0usize;
+    while i < rsvd_n as usize && 2 + i < excl.len() {
+        excl[2 + i] = rsvd[i];
+        i += 1;
+    }
+    let anexcl = 2 + rsvd_n as usize;
+    let mut kept = [(0u64, 0u64); crate::handover::MEMSRC_MAX];
+    let rep = crate::handover::subtract_regions(&[(ram_base, ram_size)], &excl[..anexcl], &mut kept);
+    system::init_mem_regions(&kept[..rep.kept], ram_end);
+    let memsrc_ok =
+        rep.kept_bytes > 0 && rep.dropped == 0 && rep.excl_bad == 0 && rep.in_bad == 0 && rsvd_bad == 0;
+    crate::handover::memsrc_record(memsrc_ok);
+    println!(
+        "memsrc  : src=dtb-direct usable={}MiB kept={}MiB regions={} excl={{low:1,archive:{},rsvd:{}}} rsvd_bad={} cut={} bad={} dropped={} -> {} (allocator holds exactly this; IRT/drivers get nothing else)",
+        ram_size >> 20,
+        rep.kept_bytes >> 20,
+        rep.kept,
+        if alloc_end < ram_end { 1 } else { 0 },
+        rsvd_n,
+        rsvd_bad,
+        rep.cut,
+        rep.excl_bad + rep.in_bad,
+        rep.dropped,
+        if memsrc_ok { "ALL PASS" } else { "FAILURES" },
+    );
     // Cap-Tabellen VOR dem ersten Cap: der Selbsttest gleich darunter installiert bereits welche.
     let cap_bytes = system::configure_caps();
     // F3 (Hygiene): Bring-up-Meldung, kein Testbericht -- nur im Pruefbau sichtbar, sonst

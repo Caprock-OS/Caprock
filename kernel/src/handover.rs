@@ -14,6 +14,18 @@
 //! them.
 //!
 //! aarch64-only. The x86 build never sees this file.
+//!
+//! Boot memory source (Mitteilung 24, "Speicherschutz beim Boot"): the
+//! allocator must never hold framebuffer, ACPI-reclaim, MMIO, or otherwise
+//! reserved ranges. On UEFI boot the handover `regions[]` (USABLE only) minus
+//! framebuffer/module/kernel spans are THE source; on direct boot the DTB
+//! memory range minus kernel/archive/reserved-memory spans is. Both go
+//! through [`subtract_regions`] -- pure range arithmetic, host-tested.
+//!
+//! Enforced property: MEM holds exactly the kept regions, and everything the
+//! IRT or a driver maps or owns (loader copies, DMA grants, handover frames)
+//! is allocated from MEM. Reserved ranges are therefore unreachable to EL0
+//! by construction -- there is no second source to audit.
 
 use caprock_hal::println;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -153,6 +165,366 @@ pub fn span_bounds_ok(base: u64, len: u64, max_len: u64, kstart: u64, kend: u64)
 #[allow(dead_code)]
 pub fn drv_span_bounds_ok(base: u64, len: u64, kstart: u64, kend: u64) -> bool {
     span_bounds_ok(base, len, HO_MAX_DRV_LEN, kstart, kend)
+}
+
+// --- Boot memory source: pure range subtraction -------------------------------
+//
+// Mitteilung 24: the allocator source is usable-minus-reserved, never the raw
+// firmware window. UEFI call shape (strand 4, `uefi_boot.rs`, not in this
+// tree yet) over the SAME core:
+//   usable = handover regions[] filtered to USABLE (base, len),
+//   excl   = [framebuffer if plausible] + [kernel] + [archive] + modules[],
+//   kept   = subtract_regions(usable, excl, &mut kept) -> init_mem_regions.
+// Direct boot (wired below): usable = DTB memory range, excl = low/kernel +
+// archive window + DTB reserved-memory regs. No AML, no policy beyond bounds:
+// every span is arithmetic, every refusal is counted.
+
+/// Kept-region capacity of the boot source computation (stack scratch).
+pub const MEMSRC_MAX: usize = 16;
+/// Reserved-memory entries read per DTB (direct boot).
+pub const HO_MAX_RSVD: usize = 8;
+
+/// What [`subtract_regions`] kept, cut, and refused. Every field is printed
+/// on the `memsrc` line; a red field fails loudly there, never silently.
+pub struct MemsrcCounts {
+    /// Kept regions written to `out` (<= `out.len()`).
+    pub kept: usize,
+    /// Their total bytes.
+    pub kept_bytes: u64,
+    /// Exclusion applications that actually removed bytes.
+    pub cut: u32,
+    /// Empty exclusions skipped (unused slots, not a finding).
+    pub excl_empty: u32,
+    /// Wrapping exclusions: counted AND applied saturating to u64::MAX
+    /// (fail-closed direction for an insane input; construction sites
+    /// pre-validate, so this is belt, not path).
+    pub excl_bad: u32,
+    /// Corrupt usable inputs skipped (zero length or wrapping end).
+    pub in_bad: u32,
+    /// Pieces beyond `out` capacity (a too-small caller buffer, not a
+    /// firmware finding -- size `out` as MEMSRC_MAX and this stays 0).
+    pub dropped: u32,
+}
+
+/// Usable-minus-reserved as pure arithmetic. `usable` and `excl` are
+/// (base, len) spans; `out` receives the kept pieces in input order.
+/// Overlaps (also exclusion-vs-exclusion) resolve naturally; adjacency
+/// without overlap cuts nothing. Deterministic; no allocation, no parsing.
+pub fn subtract_regions(
+    usable: &[(u64, u64)],
+    excl: &[(u64, u64)],
+    out: &mut [(u64, u64)],
+) -> MemsrcCounts {
+    let mut c = MemsrcCounts {
+        kept: 0,
+        kept_bytes: 0,
+        cut: 0,
+        excl_empty: 0,
+        excl_bad: 0,
+        in_bad: 0,
+        dropped: 0,
+    };
+    // Classify exclusions once (counts are per exclusion, not per piece).
+    let mut bad_excl = 0u32;
+    let mut empty_excl = 0u32;
+    for &(b, l) in excl {
+        if l == 0 {
+            empty_excl += 1;
+        } else if b.checked_add(l).is_none() {
+            bad_excl += 1;
+        }
+    }
+    c.excl_empty = empty_excl;
+    c.excl_bad = bad_excl;
+    // Scratch for one usable span's pieces on the stack (allocation-free).
+    // One input span plus at most one extra piece per applied exclusion;
+    // MEMSRC_MAX+1 slots cover every firmware-realistic input, and anything
+    // beyond is counted as dropped, never lost silently.
+    for &(ub, ul) in usable {
+        if ul == 0 {
+            c.in_bad += 1;
+            continue;
+        }
+        let Some(uend) = ub.checked_add(ul) else {
+            c.in_bad += 1;
+            continue;
+        };
+        // Piece list as (base, end) pairs on the stack.
+        let mut pieces = [(0u64, 0u64); MEMSRC_MAX + 1];
+        let mut npieces = 1usize;
+        pieces[0] = (ub, uend);
+        for &(eb, el) in excl {
+            if el == 0 {
+                continue;
+            }
+            // Wrapping exclusion: saturate to the top (fail-closed direction,
+            // counted above). Construction sites pre-validate; this arm is
+            // pinned by host tests, not by firmware.
+            let eend = eb.checked_add(el).unwrap_or(u64::MAX);
+            let mut w = 0usize;
+            while w < npieces {
+                let (pb, pe) = pieces[w];
+                if eb < pe && pb < eend {
+                    // Overlap: cut out [max(pb,eb), min(pe,eend)).
+                    c.cut += 1;
+                    let cb = pb.max(eb);
+                    let ce = pe.min(eend);
+                    if pb < cb && ce < pe {
+                        // Split: keep [pb,cb), insert [ce,pe) behind.
+                        pieces[w] = (pb, cb);
+                        if npieces < pieces.len() {
+                            // Shift right to make room for the split tail.
+                            let mut s = npieces;
+                            while s > w + 1 {
+                                pieces[s] = pieces[s - 1];
+                                s -= 1;
+                            }
+                            pieces[w + 1] = (ce, pe);
+                            npieces += 1;
+                        } else {
+                            // Scratch full: keep the head, count the tail as
+                            // dropped (reported; sized so real inputs never
+                            // hit this).
+                            pieces[w] = (pb, cb);
+                            c.dropped += 1;
+                        }
+                    } else if pb < cb {
+                        pieces[w] = (pb, cb);
+                    } else if ce < pe {
+                        pieces[w] = (ce, pe);
+                    } else {
+                        // Fully covered: remove by shifting left.
+                        let mut s = w;
+                        while s + 1 < npieces {
+                            pieces[s] = pieces[s + 1];
+                            s += 1;
+                        }
+                        npieces -= 1;
+                        continue; // re-examine the shifted piece
+                    }
+                }
+                w += 1;
+            }
+        }
+        for i in 0..npieces {
+            let (pb, pe) = pieces[i];
+            if pe <= pb {
+                continue;
+            }
+            if c.kept < out.len() {
+                out[c.kept] = (pb, pe - pb);
+                c.kept += 1;
+                c.kept_bytes += pe - pb;
+            } else {
+                c.dropped += 1;
+            }
+        }
+    }
+    c
+}
+
+// --- DTB reserved-memory (direct boot) ----------------------------------------
+//
+// Minimal walker over a DTB slice: decodes the `reg` of `/reserved-memory`
+// children with that node's `#address-cells`/`#size-cells` (FDT defaults
+// (2,1) at the root, inherited). DIVERGENCE: duplicates the `caprock-dtb`
+// token discipline (strand 3 owns `caprock-dtb`; convergence is a
+// `reserved_regs()` API there -- see the patch-text in the strand report).
+// Refusals, all counted, never silent: insane cells, `ranges` translation
+// (beyond bounds -- refused, not misplaced), per-reg overflow, over-capacity.
+// `status` is deliberately NOT honoured: a disabled reservation stays
+// excluded (fail-closed direction for protection; no AML either way).
+
+fn be32at(data: &[u8], off: usize) -> Option<u32> {
+    let b = data.get(off..off + 4)?;
+    Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+fn cstrlen(data: &[u8], off: usize) -> Option<usize> {
+    let rest = data.get(off..)?;
+    Some(rest.iter().position(|&c| c == 0).unwrap_or(rest.len()))
+}
+
+const FDT_BEGIN_NODE: u32 = 1;
+const FDT_END_NODE: u32 = 2;
+const FDT_PROP: u32 = 3;
+const FDT_NOP: u32 = 4;
+const FDT_END: u32 = 9;
+
+/// Read `/reserved-memory` regs. Returns `(found, corrupt)`; `out` holds up
+/// to `HO_MAX_RSVD` spans (valid extras beyond capacity count as corrupt:
+/// silently dropping a reservation is worse than reporting it).
+pub fn dtb_reserved_regs(
+    dtb: &[u8],
+    out: &mut [(u64, u64); HO_MAX_RSVD],
+) -> (u32, u32) {
+    let mut found = 0u32;
+    let mut corrupt = 0u32;
+    if dtb.len() < 40 || be32at(dtb, 0) != Some(0xd00d_feed) {
+        return (0, 0); // no header, no reservations -- absent, not corrupt
+    }
+    let off_struct = match be32at(dtb, 8) {
+        Some(v) => v as usize,
+        None => return (0, 0),
+    };
+    let off_strings = match be32at(dtb, 12) {
+        Some(v) => v as usize,
+        None => return (0, 0),
+    };
+    if off_struct >= dtb.len() || off_strings >= dtb.len() {
+        return (0, 0);
+    }
+    let mut pos = off_struct;
+    let mut depth = 0usize;
+    // Cell sizes: FDT defaults (2,1), root overrides, /reserved-memory
+    // inherits root and may override again. Children decode with the node's.
+    let mut root_addr = 2u32;
+    let mut root_size = 1u32;
+    let mut in_rsvd_at = usize::MAX; // depth of /reserved-memory
+    let mut rsvd_addr = 2u32;
+    let mut rsvd_size = 1u32;
+    let mut rsvd_ranges_bad = false;
+    // Monotonic walk: pos advances >= 4 per step, always terminates.
+    while pos + 4 <= dtb.len() {
+        let tok = match be32at(dtb, pos) {
+            Some(t) => t,
+            None => return (found, corrupt),
+        };
+        pos += 4;
+        match tok {
+            FDT_BEGIN_NODE => {
+                let nl = match cstrlen(dtb, pos) {
+                    Some(n) => n,
+                    None => return (found, corrupt),
+                };
+                let name = dtb.get(pos..pos + nl).unwrap_or(&[]);
+                pos += (nl + 1 + 3) & !3;
+                if pos > dtb.len() {
+                    return (found, corrupt);
+                }
+                depth += 1;
+                if depth == 2 && name == b"reserved-memory" {
+                    in_rsvd_at = depth;
+                    // Inherit root cells; the node's own props may override.
+                    rsvd_addr = root_addr;
+                    rsvd_size = root_size;
+                    rsvd_ranges_bad = false;
+                }
+            }
+            FDT_END_NODE => {
+                if depth == in_rsvd_at {
+                    in_rsvd_at = usize::MAX;
+                }
+                depth = depth.saturating_sub(1);
+            }
+            FDT_PROP => {
+                let len = match be32at(dtb, pos) {
+                    Some(v) => v as usize,
+                    None => return (found, corrupt),
+                };
+                let nameoff = match be32at(dtb, pos + 4) {
+                    Some(v) => v as usize,
+                    None => return (found, corrupt),
+                };
+                let val = pos + 8;
+                pos = match val.checked_add((len + 3) & !3) {
+                    Some(p) => p,
+                    None => return (found, corrupt),
+                };
+                if pos > dtb.len() {
+                    return (found, corrupt);
+                }
+                let pname = off_strings
+                    .checked_add(nameoff)
+                    .and_then(|o| dtb.get(o..))
+                    .and_then(|r| {
+                        let e = r.iter().position(|&c| c == 0).unwrap_or(r.len());
+                        r.get(..e)
+                    })
+                    .unwrap_or(&[]);
+                if pname == b"#address-cells" && len >= 4 {
+                    let v = be32at(dtb, val).unwrap_or(2);
+                    if depth == 1 {
+                        root_addr = v;
+                    } else if in_rsvd_at != usize::MAX && depth == in_rsvd_at {
+                        rsvd_addr = v;
+                    }
+                } else if pname == b"#size-cells" && len >= 4 {
+                    let v = be32at(dtb, val).unwrap_or(1);
+                    if depth == 1 {
+                        root_size = v;
+                    } else if in_rsvd_at != usize::MAX && depth == in_rsvd_at {
+                        rsvd_size = v;
+                    }
+                } else if pname == b"ranges"
+                    && in_rsvd_at != usize::MAX
+                    && depth == in_rsvd_at
+                    && len > 0
+                {
+                    // Translation tables are beyond bounds: refuse the node
+                    // rather than misplace its regs. Counted: an unusable
+                    // reservation must be loud, not absent-looking.
+                    rsvd_ranges_bad = true;
+                    corrupt += 1;
+                } else if pname == b"reg"
+                    && in_rsvd_at != usize::MAX
+                    && depth == in_rsvd_at + 1
+                    && !rsvd_ranges_bad
+                {
+                    let ac = rsvd_addr as usize;
+                    let sc = rsvd_size as usize;
+                    if !(1..=2).contains(&ac) || !(1..=2).contains(&sc) {
+                        corrupt += 1;
+                    } else if len < 4 * (ac + sc) {
+                        corrupt += 1;
+                    } else {
+                        let mut base = 0u64;
+                        let mut ok = true;
+                        let mut i = 0;
+                        while i < ac {
+                            let w = match be32at(dtb, val + 4 * i) {
+                                Some(w) => w as u64,
+                                None => {
+                                    ok = false;
+                                    break;
+                                }
+                            };
+                            base = (base << 32) | w;
+                            i += 1;
+                        }
+                        let mut size = 0u64;
+                        i = 0;
+                        while i < sc {
+                            let w = match be32at(dtb, val + 4 * ac + 4 * i) {
+                                Some(w) => w as u64,
+                                None => {
+                                    ok = false;
+                                    break;
+                                }
+                            };
+                            size = (size << 32) | w;
+                            i += 1;
+                        }
+                        match (ok, size, base.checked_add(size)) {
+                            (true, 1.., Some(_)) => {
+                                if (found as usize) < out.len() {
+                                    out[found as usize] = (base, size);
+                                    found += 1;
+                                } else {
+                                    corrupt += 1; // over capacity, reported
+                                }
+                            }
+                            _ => corrupt += 1,
+                        }
+                    }
+                }
+            }
+            FDT_NOP => {}
+            FDT_END => return (found, corrupt),
+            _ => return (found, corrupt),
+        }
+    }
+    (found, corrupt)
 }
 
 // --- Boot state ------------------------------------------------------------
@@ -468,4 +840,35 @@ pub fn irt_ho_done() -> bool {
         && badge & (1 << 44) != 0
         && badge & (1 << 63) != 0
         && (field(badge, 56, 3) == 0 || badge & (1 << 59) != 0)
+}
+
+// --- Direct-boot DTB slice + memsrc verdict -----------------------------------
+
+/// The DTB to read reserved-memory from at allocator setup: the validated
+/// firmware bytes when `x0` carried them, else the embedded build-time copy.
+/// Same source the staging path copies later; header re-checked by the walker.
+pub fn direct_dtb() -> &'static [u8] {
+    let x0 = HO_X0.load(Ordering::Relaxed);
+    if x0 != 0 {
+        let len = HO_X0_LEN.load(Ordering::Relaxed) as usize;
+        // SAFETY: probe-window + header + full span validated in
+        // `note_boot_dtb`; every consumer is bounds-checked regardless.
+        unsafe { core::slice::from_raw_parts(x0 as *const u8, len) }
+    } else {
+        crate::DTB_BYTES
+    }
+}
+
+static HO_MEMSRC_OK: AtomicU64 = AtomicU64::new(0);
+
+/// Record the boot memory-source verdict for the suite gate.
+pub fn memsrc_record(ok: bool) {
+    HO_MEMSRC_OK.store(ok as u64, Ordering::Relaxed);
+}
+
+/// Gating predicate for `all_done`: the allocator holds exactly usable-minus-
+/// reserved (kept non-empty, nothing refused, nothing dropped).
+#[cfg(feature = "selftest")]
+pub fn memsrc_ok() -> bool {
+    HO_MEMSRC_OK.load(Ordering::Relaxed) != 0
 }
