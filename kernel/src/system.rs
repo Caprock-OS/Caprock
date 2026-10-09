@@ -3913,7 +3913,7 @@ fn dispatch_spawn(
     prio: u8,
     sub: u64,
 ) -> Result<u64, u64> {
-    let (base, _len, stack_top) = spawn_stack_validated(pd, cap, sub)?;
+    let (base, region_len, stack_top) = spawn_stack_validated(pd, cap, sub)?;
     // **D0 wörtlich: parken -- binden -- zulassen.** Ein Thread, der lauffähig ist, bevor er seine
     // PD hat, macht seinen ersten Syscall mit LEEREM Cspace. Das hat zehn Tage gekostet, und die
     // Rate war 0,018 %.
@@ -3925,7 +3925,7 @@ fn dispatch_spawn(
     // und seine Cap löschbar wäre -- und ihre Finalisierung gibt den Speicher an den Allokator
     // zurück, unter den Füßen eines laufenden Stapels.
     let tid = admit(parked).ok_or(caprock_abi::result::ERR_NOSPACE)?;
-    if !record_stack_cap(tid, cap, base, _len) {
+    if !record_stack_cap(tid, cap, base, region_len) {
         // **Fail-closed.** Ohne Eintrag ist die Stack-Cap loeschbar, waehrend der Thread auf ihr
         // laeuft -- die Finalisierung gaebe den Speicher an den Allokator zurueck, unter den
         // Fuessen eines laufenden Stapels. Lieber kein Thread als ein ungeschuetzter.
