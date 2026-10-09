@@ -1636,6 +1636,29 @@ fn lxpd_bilanz() -> (usize, usize) {
     println!(
         "lxpddrv : gestartet={g} abgewiesen={a} an-init-verwiesen={v} Spannen={s} (Treiber-PDs aus Bootloader-/Archiv-Modulen; Manifest-Signatur gegen MANIFEST_KEYS, Modul-Hash gegen Eintrag)"
     );
+    // **Completeness on ARM** (strand 8, LXPD-ARM): on x86 the bring-up prints it
+    // (`arch::x86_64::bringup`); on ARM that spot does not exist — without this line
+    // a loaded-but-unregistered driver would be invisible on ARM (the same blind spot
+    // Fahrt 4 first named on x86: `6/7 FEHLEND pid 7`). Same format as there, so both
+    // arches check the same line. aarch64 only: on x86 it would be a second truth
+    // about the same number.
+    #[cfg(target_arch = "aarch64")]
+    {
+        let mut fehlend = [0u32; 16];
+        let (erw, gel, n) = vollzaehligkeit(&mut fehlend);
+        if erw == 0 {
+            println!("vollzahl: SKIP -- kein Manifest, also keine Sollmenge");
+        } else {
+            print!("vollzahl: {gel} von {erw} Programmen des Manifests sind geladen");
+            if n > 0 {
+                print!(" · FEHLEND:");
+                for &pid in fehlend.iter().take(n) {
+                    print!(" program_id {pid}");
+                }
+            }
+            println!(" : {}", if n == 0 { "ALL PASS" } else { "FAILURES" });
+        }
+    }
     (g, a)
 }
 

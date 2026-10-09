@@ -71,6 +71,8 @@ pub const MSG_BAD_SIGNATURE: &str = "lxpd: missing or wrong manifest signature";
 pub const MSG_BAD_GRANTS: &str = "lxpd: empty device grants";
 /// Keine ELF-Magic — Pfad (b) greift nicht.
 pub const MSG_NOT_ELF: &str = "lxpd: not an ELF image";
+/// Image basis below the loadable window (see [`check_image_basis`]).
+pub const MSG_BAD_BASIS: &str = "lxpd: image basis below the loadable window";
 
 /// Parse-Fehler. Jeder Pfad, der eine fehlerhafte Eingabe erkennt, endet hier — **nie** in
 /// einem Out-of-Bounds-Zugriff oder Panic.
@@ -96,6 +98,9 @@ pub enum LxpdError {
     BadGrants,
     /// Keine ELF-Magic — kein ET_EXEC-Pfad.
     NotElf,
+    /// A `PT_LOAD` segment or the entry point lies below the loadable
+    /// window — carries the offending address.
+    BadBasis { vaddr: u64 },
     /// Ein als ELF erkanntes Image scheitert an den Loader-Regeln (Magic/Klasse/Typ/
     /// Maschine/PHDR/`memsz<filesz`/Alignment) — die benannte Diagnose steht in der
     /// eingepackten Variante.
@@ -121,6 +126,7 @@ impl LxpdError {
             LxpdError::BadSignature => MSG_BAD_SIGNATURE,
             LxpdError::BadGrants => MSG_BAD_GRANTS,
             LxpdError::NotElf => MSG_NOT_ELF,
+            LxpdError::BadBasis { .. } => MSG_BAD_BASIS,
             LxpdError::Loader(_) => "lxpd: loader rules reject the ELF image",
         }
     }
@@ -130,6 +136,7 @@ impl core::fmt::Display for LxpdError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             LxpdError::BadStub(id) => write!(f, "{}: stub {}", MSG_BAD_STUB, id),
+            LxpdError::BadBasis { vaddr } => write!(f, "{MSG_BAD_BASIS}: {vaddr:#x}"),
             LxpdError::Loader(e) => write!(f, "lxpd: loader rules reject the ELF image: {:?}", e),
             _ => f.write_str(self.as_str()),
         }
@@ -309,6 +316,49 @@ pub fn elf_ready(bytes: &[u8]) -> Result<(), LxpdError> {
         return Err(LxpdError::NotElf);
     }
     ElfImage::parse(bytes).map(|_| ()).map_err(LxpdError::Loader)
+}
+
+// --- Image basis (the edge before loading) -------------------------------------------------
+//
+// The kernel maps a `PT_LOAD` segment only above its user window: below it,
+// `vspace_map_page_at` refuses, and the load path reports Code 10
+// (`MANGEL_MAPPING_ABGEWIESEN`). Whoever notices a too-low-linked image only in
+// the guest gets the same refusal without a name — hence this check here, at the
+// edge, with the offending address in the error ([`LxpdError::BadBasis`]).
+//
+// Both floors are **read** from the HALs, not invented:
+// * x86_64: `USER_RAM_MIN` = 16 MiB (`crates/caprock-hal/src/x86_64/mmu.rs`, FINE_BLOCKS
+//   guard over the low 16 MiB). Real programs link at 0x20000000.
+// * aarch64: `USER_RAM_MIN` = RAM_BASE + 2 MiB (`crates/caprock-hal/src/aarch64/mmu.rs`).
+//   Real programs link at 0x41000000 (`programs/user.ld`).
+//
+// This is deliberately a mirror, not a second enforcement: the rule is enforced in the
+// kernel (HAL guard, same on both architectures); this function lets tooling and tests
+// fail early and by name. Existing paths (`elf_ready`) stay untouched — a new verdict
+// changes no old one.
+
+/// Lowest loadable image basis on x86_64 (16 MiB, see module docs).
+pub const MIN_IMAGE_BASIS_X86: u64 = 0x100_0000;
+/// Lowest loadable image basis on aarch64 (RAM_BASE + 2 MiB, see module docs).
+pub const MIN_IMAGE_BASIS_ARM: u64 = 0x4020_0000;
+
+/// Measure an ET_EXEC image against the basis rule: ELF shape ([`elf_ready`]) PLUS
+/// entry point and every `PT_LOAD` segment at/above `min_basis`. Below that there
+/// is no "almost loadable", only [`LxpdError::BadBasis`] with the address.
+pub fn check_image_basis(bytes: &[u8], min_basis: u64) -> Result<(), LxpdError> {
+    if !is_elf(bytes) {
+        return Err(LxpdError::NotElf);
+    }
+    let img = ElfImage::parse(bytes).map_err(LxpdError::Loader)?;
+    if img.entry() < min_basis {
+        return Err(LxpdError::BadBasis { vaddr: img.entry() });
+    }
+    for seg in img.segments() {
+        if seg.vaddr < min_basis {
+            return Err(LxpdError::BadBasis { vaddr: seg.vaddr });
+        }
+    }
+    Ok(())
 }
 
 // --- Host-Tests ------------------------------------------------------------
@@ -540,7 +590,7 @@ mod tests {
         v[6] = 1; // Version
         v[16..18].copy_from_slice(&etype.to_le_bytes());
         v[18..20].copy_from_slice(&machine.to_le_bytes());
-        v[24..32].copy_from_slice(&0x1000u64.to_le_bytes()); // entry
+        v[24..32].copy_from_slice(&vaddr.to_le_bytes()); // entry = segment start (MinELF shape)
         v[32..40].copy_from_slice(&(phoff as u64).to_le_bytes());
         v[54..56].copy_from_slice(&56u16.to_le_bytes());
         v[56..58].copy_from_slice(&1u16.to_le_bytes());
@@ -589,5 +639,126 @@ mod tests {
         let raw = good_image();
         assert_eq!(elf_ready(&raw).unwrap_err(), LxpdError::NotElf);
         assert_eq!(elf_ready(b"").unwrap_err(), LxpdError::NotElf);
+    }
+
+    // --- Image basis: the edge before loading ------------------------------------
+
+    #[test]
+    fn basis_x86_rejects_low_link() {
+        // The lxport test image (0x100000/0x200000, low 16 MiB) is rightly refused by
+        // the kernel (Code 10) — here the same refusal falls, only earlier and addressed.
+        for low in [0x1000u64, 0x100_000, 0x200_000, 0xFF_F000] {
+            let raw = build_exec(2, EXPECTED_MACHINE, low, 8, 8);
+            assert_eq!(
+                check_image_basis(&raw, MIN_IMAGE_BASIS_X86).unwrap_err(),
+                LxpdError::BadBasis { vaddr: low },
+                "basis {low:#x} must fall"
+            );
+        }
+    }
+
+    #[test]
+    fn basis_x86_accepts_at_and_above_floor() {
+        // The other direction, without which the test above would prove nothing: exactly
+        // the threshold and above must pass — otherwise "is refused" would also hold for
+        // a checker that accepts nothing at all.
+        for ok in [MIN_IMAGE_BASIS_X86, 0x2000_0000] {
+            let raw = build_exec(2, EXPECTED_MACHINE, ok, 8, 8);
+            assert_eq!(check_image_basis(&raw, MIN_IMAGE_BASIS_X86), Ok(()));
+        }
+    }
+
+    #[test]
+    fn basis_arm_floor_differs_from_x86() {
+        // On ARM the user window sits higher (RAM_BASE + 2 MiB): what would load on
+        // x86 (0x20000000 — where real programs link there) falls here.
+        let x86_ok = build_exec(2, EXPECTED_MACHINE, 0x2000_0000, 8, 8);
+        assert_eq!(check_image_basis(&x86_ok, MIN_IMAGE_BASIS_X86), Ok(()));
+        assert_eq!(
+            check_image_basis(&x86_ok, MIN_IMAGE_BASIS_ARM).unwrap_err(),
+            LxpdError::BadBasis { vaddr: 0x2000_0000 }
+        );
+        // The canonical ARM basis (programs/user.ld) and the exact floor pass.
+        for ok in [MIN_IMAGE_BASIS_ARM, 0x4100_0000] {
+            let raw = build_exec(2, EXPECTED_MACHINE, ok, 8, 8);
+            assert_eq!(check_image_basis(&raw, MIN_IMAGE_BASIS_ARM), Ok(()));
+        }
+    }
+
+    #[test]
+    fn basis_names_the_offending_address() {
+        // The refusal names the address — "linked too low" without an address is
+        // worthless as a diagnosis (same principle as UnalignedSegment).
+        let raw = build_exec(2, EXPECTED_MACHINE, 0x100_000, 8, 8);
+        let err = check_image_basis(&raw, MIN_IMAGE_BASIS_X86).unwrap_err();
+        assert_eq!(err.as_str(), MSG_BAD_BASIS);
+        let text = alloc_format(err);
+        assert!(text.contains("0x100000"), "Display must name the address: {}", text.as_str());
+        // ... and it is distinguishable from the other refusals.
+        assert_ne!(err, LxpdError::BadManifest);
+        assert_ne!(err, LxpdError::NotElf);
+        assert_ne!(err, LxpdError::Loader(LoaderError::BadElf));
+    }
+
+    #[test]
+    fn basis_checks_entry_and_every_segment() {
+        // Entry ok, single segment too low: a checker looking only at the entry
+        // would wave through an unloadable image.
+        let mut entry_high = build_exec(2, EXPECTED_MACHINE, 0x200_000, 8, 8);
+        entry_high[24..32].copy_from_slice(&MIN_IMAGE_BASIS_X86.to_le_bytes());
+        assert_eq!(
+            check_image_basis(&entry_high, MIN_IMAGE_BASIS_X86).unwrap_err(),
+            LxpdError::BadBasis { vaddr: 0x200_000 }
+        );
+    }
+
+    #[test]
+    fn basis_passes_loader_errors_through() {
+        // A broken ELF stays a loader error, not a basis error — a new verdict
+        // changes no old one.
+        let rel = build_exec(1, EXPECTED_MACHINE, MIN_IMAGE_BASIS_X86, 8, 8);
+        assert_eq!(
+            check_image_basis(&rel, MIN_IMAGE_BASIS_X86).unwrap_err(),
+            LxpdError::Loader(LoaderError::BadElf)
+        );
+        assert_eq!(
+            check_image_basis(&good_image(), MIN_IMAGE_BASIS_X86).unwrap_err(),
+            LxpdError::NotElf
+        );
+    }
+
+    /// `Display` into a fixed buffer without `alloc` (the crate is `no_std` outside tests).
+    fn alloc_format(e: LxpdError) -> ArrayString {
+        use core::fmt::Write as _;
+        let mut s = ArrayString::new();
+        let _ = write!(s, "{e}");
+        s
+    }
+
+    struct ArrayString {
+        buf: [u8; 96],
+        len: usize,
+    }
+
+    impl ArrayString {
+        fn new() -> Self {
+            ArrayString { buf: [0u8; 96], len: 0 }
+        }
+        fn as_str(&self) -> &str {
+            core::str::from_utf8(&self.buf[..self.len]).unwrap_or("<kein-utf8>")
+        }
+        fn contains(&self, needle: &str) -> bool {
+            self.buf[..self.len].windows(needle.len()).any(|w| w == needle.as_bytes())
+        }
+    }
+
+    impl core::fmt::Write for ArrayString {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            for &b in s.as_bytes() {
+                *self.buf.get_mut(self.len).ok_or(core::fmt::Error)? = b;
+                self.len += 1;
+            }
+            Ok(())
+        }
     }
 }

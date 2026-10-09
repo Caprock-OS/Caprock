@@ -209,3 +209,26 @@ Bau-Grenze: `libcaprock` trägt einen Panik-Handler nur auf freistehenden Zielen
 (`target_os = "none"`, s. `programs/*-caprock-user.json`). Auf dem Host gäbe es sonst E0152
 (zweiter `panic_impl` neben `std` — auch als blosse Dependenz, denn `cfg(test)` gilt dort
 nicht für sie). PD-nah geprüft: `cargo check --target x86_64-unknown-none` ist grün.
+
+## 7. ARM status (strand 8, LXPD-ARM — English by language rule)
+
+The BOOT path reaches first driver start on aarch64 (`tools/lxpd_arm_fahrt1.sh`:
+verify-before-load plus `[7]lxpd-minelf gestartet` plus vollzahl in the guest log).
+What that covers, and where this service's E2E stops on ARM:
+
+* Covered: manifest/driver checks are arch-neutral (`caprock-lxpd` builds for the
+  ARM kernel target; Ed25519 manifest verify + sha256 image bind run before any
+  load, on both arches). The ARM image-basis rule (user window
+  `[0x40200000, 0x80000000)`, enforced by the HAL guard, surfaced as Code 10) is
+  proven by the vehicle's negative boot.
+* NOT covered — the boundary a started driver hits on ARM: there is no device-PD
+  path on ARM yet (strand 2: no MSI-X, no `bind_irq`, no `offer_driver_device`
+  from the ARM boot). A driver that starts therefore holds no device, no DMA
+  window, no IRQ. First start is proven; first INTERRUPT is not.
+* This service (`lxpdrv`) is an x86_64 PD today: it builds for
+  `x86_64-caprock-user.json`, its `KernelAnstoss` staging and the E2E partitions
+  (`tools/lxpd-e2e.sh`) are x86-only. An `aarch64-caprock-user.json` build, an
+  ARM block driver to read from, and a `SYS_LOAD_IMAGE` proof on ARM are all
+  open (block E2E is explicitly out of strand 8).
+* Container-form (`LXPD` v1) loading ends in `TransportNur` on both arches until
+  the `bind_elf`/JSON side lands — the boot hook starts ELF modules only.

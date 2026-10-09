@@ -275,6 +275,7 @@ pub fn set_lxpd_module_span(idx: usize, base: u64, len: u64) -> bool {
 
 /// Die gemeldete Lage des Moduls `idx` (`None` = nicht gemeldet).
 pub fn lxpd_module_span(idx: usize) -> Option<(u64, u64)> {
+    discover_arm_modules();
     let base = LXPD_BASE.get(idx)?.load(Ordering::Relaxed);
     let len = LXPD_LEN.get(idx)?.load(Ordering::Relaxed);
     (base != 0 && len != 0).then_some((base, len))
@@ -292,11 +293,121 @@ pub fn lxpd_module_bytes(idx: usize) -> Option<&'static [u8]> {
 }
 
 /// Wie viele LXPD-Modul-Spannen gemeldet sind (Bericht, keine Autorität).
+/// (ARM discovery rides along via [`lxpd_module_span`] — one call is enough.)
 pub fn lxpd_module_gemeldet() -> usize {
     (0..LXPD_MAX_MODULES).filter(|&i| lxpd_module_span(i).is_some()).count()
 }
 
-// --- Host-Tests (Byte-Literale, gut/böse) ----------------------------------------------------------------------------
+// --- ARM module slots (test/bring-up convention, aarch64 only) -------------------------------
+//
+// x86 learns driver-module spans from the bootloader (multiboot modules 1.., reported by
+// `arch::x86_64::bringup` before the first allocation). ARM has no bootloader modules:
+// QEMU `-device loader` writes blobs at fixed addresses inside the reserved MOD window,
+// and this scan finds them. The window stays outside the PhysAllocator range, so lazy
+// discovery at first use (long after MMU init) is safe — nothing to carve out.
+//
+// Slot layout: 1 MiB slots, top-down from the window end, so a growing archive (bottom-up
+// from the window base) cannot silently overwrite a module — the vehicle refuses to build
+// once the archive would reach the lowest slot.
+//
+// ```text
+// slot i base = WINDOW_BASE + WINDOW_LEN - (i + 1) * SLOT_LEN
+// slot bytes  = [8 B magic "LXARMOD1"][8 B LE image_len][image bytes][zero pad]
+// ```
+//
+// The manifest hash binds the IMAGE bytes; the slot only frames them (`image_len` tells
+// how many bytes after the 16-byte header belong to the image). Anything else in the slot
+// (zeros on a fresh boot, stale bytes, a truncated length) is not a module.
+//
+// The two window numbers MUST match `loader::MOD_BASE`/`loader::MOD_WINDOW` — one fact,
+// stated here with its authority named (and asserted by the vehicle before every boot).
+
+/// Base of the reserved MOD window on ARM (must match `loader::MOD_BASE`).
+#[cfg(target_arch = "aarch64")]
+pub const LXPD_ARM_WINDOW_BASE: u64 = 0x1_3F00_0000;
+/// Length of the reserved MOD window on ARM (must match `loader::MOD_WINDOW`).
+#[cfg(target_arch = "aarch64")]
+pub const LXPD_ARM_WINDOW_LEN: u64 = 0x100_0000;
+/// One module slot is 1 MiB (page-aligned, far larger than any min-ELF driver).
+#[cfg(target_arch = "aarch64")]
+pub const LXPD_ARM_SLOT_LEN: u64 = 0x10_0000;
+/// Slot header magic (`"LXARMOD1"`). Unconditional so the header rule stays
+/// host-testable; the addresses it frames only exist on ARM.
+pub const LXPD_ARM_SLOT_MAGIC: &[u8; 8] = b"LXARMOD1";
+/// Slot header width: 8 B magic + 8 B LE image length.
+pub const LXPD_ARM_SLOT_HEADER_LEN: usize = 16;
+
+/// Pure slot math (no memory access): base address of slot `idx`. Takes the window as
+/// parameters so the formula is unit-testable on the host without ARM addresses.
+fn arm_slot_base(window_base: u64, window_len: u64, slot_len: u64, idx: usize) -> u64 {
+    window_base + window_len - (idx as u64 + 1) * slot_len
+}
+
+/// Pure header check over the 16 header bytes: `Some(image_len)` for a well-formed
+/// framed module, `None` for anything else (wrong magic, zero length, length escaping
+/// the slot, truncated header). The slot length travels as a parameter so the rule
+/// stays testable without the ARM constants.
+fn parse_arm_slot_header(hdr: &[u8], slot_len: u64) -> Option<u64> {
+    let magic = hdr.get(..8)?;
+    if magic != &LXPD_ARM_SLOT_MAGIC[..] {
+        return None;
+    }
+    let len_bytes = hdr.get(8..LXPD_ARM_SLOT_HEADER_LEN)?;
+    let len = u64::from_le_bytes([
+        len_bytes[0],
+        len_bytes[1],
+        len_bytes[2],
+        len_bytes[3],
+        len_bytes[4],
+        len_bytes[5],
+        len_bytes[6],
+        len_bytes[7],
+    ]);
+    if len == 0 {
+        return None;
+    }
+    let total = (LXPD_ARM_SLOT_HEADER_LEN as u64).checked_add(len)?;
+    if total > slot_len {
+        return None;
+    }
+    Some(len)
+}
+
+#[cfg(target_arch = "aarch64")]
+fn arm_slot_image(slot_base: u64) -> Option<(u64, u64)> {
+    // SAFETY: `[slot_base, slot_base+16)` is reserved identity-mapped Normal RAM inside
+    // the MOD window (same contract as `lxpd_module_bytes` below). Read-only; the parse
+    // above is fully bounds-checked.
+    let hdr = unsafe { core::slice::from_raw_parts(slot_base as *const u8, LXPD_ARM_SLOT_HEADER_LEN) };
+    parse_arm_slot_header(hdr, LXPD_ARM_SLOT_LEN)
+        .map(|len| (slot_base + LXPD_ARM_SLOT_HEADER_LEN as u64, len))
+}
+
+/// Scan the ARM module slots once and register whatever is framed there. Idempotent:
+/// occupied table entries (reported by whatever mechanism owns them) are never
+/// overwritten, and the scan runs at most once per boot.
+#[cfg(target_arch = "aarch64")]
+fn discover_arm_modules() {
+    static DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    if DONE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    for i in 0..LXPD_MAX_MODULES {
+        if LXPD_BASE.get(i).is_some_and(|b| b.load(Ordering::Relaxed) != 0) {
+            continue;
+        }
+        let base = arm_slot_base(LXPD_ARM_WINDOW_BASE, LXPD_ARM_WINDOW_LEN, LXPD_ARM_SLOT_LEN, i);
+        if let Some((img_base, img_len)) = arm_slot_image(base) {
+            set_lxpd_module_span(i, img_base, img_len);
+        }
+    }
+}
+
+/// No bootloader modules off ARM: the call in [`lxpd_module_span`] compiles to nothing
+/// there, and the x86 span path (`set_lxpd_module_span` from bringup) is untouched.
+#[cfg(not(target_arch = "aarch64"))]
+#[inline(always)]
+fn discover_arm_modules() {}
 
 #[cfg(test)]
 mod tests {
@@ -494,5 +605,66 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    // --- ARM slot convention (pure math + header rule, host-tested) ---------------------
+
+    const T_BASE: u64 = 0x1_3F00_0000;
+    const T_LEN: u64 = 0x100_0000;
+    const T_SLOT: u64 = 0x10_0000;
+
+    fn header(len: u64) -> [u8; LXPD_ARM_SLOT_HEADER_LEN] {
+        let mut h = [0u8; LXPD_ARM_SLOT_HEADER_LEN];
+        h[..8].copy_from_slice(&LXPD_ARM_SLOT_MAGIC[..]);
+        h[8..16].copy_from_slice(&len.to_le_bytes());
+        h
+    }
+
+    #[test]
+    fn arm_slots_stack_top_down_inside_window() {
+        // Slot 0 ends at the window end, slot 6 is the lowest; all inside, page-aligned,
+        // non-overlapping.
+        let s0 = arm_slot_base(T_BASE, T_LEN, T_SLOT, 0);
+        assert_eq!(s0, T_BASE + T_LEN - T_SLOT);
+        let s6 = arm_slot_base(T_BASE, T_LEN, T_SLOT, LXPD_MAX_MODULES - 1);
+        assert_eq!(s6, T_BASE + T_LEN - LXPD_MAX_MODULES as u64 * T_SLOT);
+        assert!(s6 >= T_BASE, "lowest slot must stay inside the window");
+        assert_eq!(s0 % 4096, 0);
+        assert_eq!(s6 % 4096, 0);
+        // Archive budget below the lowest slot: 9 MiB (the vehicle asserts this).
+        assert_eq!(s6 - T_BASE, 9 * 0x10_0000);
+        for i in 0..LXPD_MAX_MODULES {
+            let a = arm_slot_base(T_BASE, T_LEN, T_SLOT, i);
+            assert!(a >= T_BASE && a + T_SLOT <= T_BASE + T_LEN, "slot {i} escapes");
+            if i > 0 {
+                let prev = arm_slot_base(T_BASE, T_LEN, T_SLOT, i - 1);
+                assert_eq!(a + T_SLOT, prev, "slot {i} must tile exactly");
+            }
+        }
+    }
+
+    #[test]
+    fn arm_slot_header_good() {
+        assert_eq!(parse_arm_slot_header(&header(8192), T_SLOT), Some(8192));
+        // Exact fit (header + image == slot) is a module, not an overflow.
+        assert_eq!(parse_arm_slot_header(&header(T_SLOT - 16), T_SLOT), Some(T_SLOT - 16));
+        // One byte more is not.
+        assert_eq!(parse_arm_slot_header(&header(T_SLOT - 15), T_SLOT), None);
+    }
+
+    #[test]
+    fn arm_slot_header_bad() {
+        // Wrong magic (fresh-boot zeros hit this).
+        assert_eq!(parse_arm_slot_header(&[0u8; 16], T_SLOT), None);
+        let mut bad = header(64);
+        bad[0] = b'X';
+        assert_eq!(parse_arm_slot_header(&bad, T_SLOT), None);
+        // Zero length: a header with nothing behind it.
+        assert_eq!(parse_arm_slot_header(&header(0), T_SLOT), None);
+        // Truncated header.
+        assert_eq!(parse_arm_slot_header(&header(64)[..15], T_SLOT), None);
+        assert_eq!(parse_arm_slot_header(&[], T_SLOT), None);
+        // Absurd length (u64::MAX must not wrap into acceptance).
+        assert_eq!(parse_arm_slot_header(&header(u64::MAX), T_SLOT), None);
     }
 }
