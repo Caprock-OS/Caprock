@@ -46,6 +46,9 @@ pub mod sys {
     /// **Teilbereich einer Memory-Cap ableiten** (CSUB, Mem-Server-Transport) — Spiegel von
     /// `caprock_abi::sys::CSUB` (die EINZIGE Wahrheit steht dort).
     pub const CSUB: u64 = 37;
+    /// **Kanalbeschränkte Kopie einer Endpoint-Cap ableiten** (CHAN) — Spiegel von
+    /// `caprock_abi::sys::CHAN` (die EINZIGE Wahrheit steht dort).
+    pub const CHAN: u64 = 38;
     pub const CMOVE: u64 = 16;
     pub const SETRECV: u64 = 17;
     /// **Einen zweiten Thread in der EIGENEN PD erzeugen** (K1a/K1b) — s. [`super::spawn`].
@@ -122,6 +125,12 @@ pub mod pdctl {
     pub const PAUSE: u64 = 2;
     pub const RESUME: u64 = 3;
     pub const ASSIGN_BUDGET: u64 = 4;
+    /// **UserLand-PD erzeugen** — Spiegel von `caprock_abi::pdctl::CREATE`.
+    pub const CREATE: u64 = 5;
+    /// **Eigenen Speicher in die Ziel-PD mappen** — Spiegel von `caprock_abi::pdctl::MAP_INTO`.
+    pub const MAP_INTO: u64 = 6;
+    /// **Thread in der Ziel-PD erzeugen** — Spiegel von `caprock_abi::pdctl::SPAWN_INTO`.
+    pub const SPAWN_INTO: u64 = 7;
 }
 
 /// Syscall-Ergebnis (Register `x0..x6` nach `eret`).
@@ -216,6 +225,12 @@ pub fn wait_frist(cap: u64, ticks: u64) -> (u64, u64) {
 /// Synchroner Aufruf (Endpoint-Cap `cap`): senden + auf Antwort warten.
 pub fn call(cap: u64, msg: [u64; 4]) -> Ret {
     invoke(sys::CALL, cap, msg, 0)
+}
+/// Aufruf mit explizitem Kanal (Kanal = Low-32 von `x6`): geht nur durch kanalbeschränkte
+/// Caps (`CHAN`), deren Regel ihn deckt — sonst [`result::ERR_RIGHTS`], ohne dass der
+/// Server je etwas sieht. Unbeschränkte Caps prüfen `x6` nicht; `0` heisst dort nichts.
+pub fn call_with_channel(cap: u64, msg: [u64; 4], channel: u32) -> Ret {
+    invoke(sys::CALL, cap, msg, u64::from(channel))
 }
 /// Auf einen Aufruf warten (Server, Endpoint-Cap `cap`).
 pub fn recv(cap: u64) -> Ret {
@@ -366,6 +381,24 @@ pub fn unmap(cap: u64) -> u64 {
 /// Ziel-PD steuern (PdControl-Cap `cap`, Sub-Op `subop`); gibt den Ergebniscode zurück.
 pub fn pdctl(cap: u64, subop: u64) -> u64 {
     invoke(sys::PDCTL, cap, [subop, 0, 0, 0], 0).result
+}
+/// Leere UserLand-PD erzeugen (Loader-Cap `cap`); `budget` 0 = Vorgabe, `dst` freier
+/// eigener Slot für die neue PdControl-Cap. Gibt das volle `Ret` zurück: bei `OK` steht
+/// die neue PD-Nummer in `msg[0]`. Danach `pd_spawn_into`, `pd_map_into`, dann `pdctl`
+/// mit `START` — diese Reihenfolge steht auch im Kernel (`MAP_INTO` braucht den Thread).
+pub fn pd_create(cap: u64, budget: u64, dst: u64) -> Ret {
+    invoke(sys::PDCTL, cap, [pdctl::CREATE, budget, dst, 0], 0)
+}
+/// Eigenen Speicher (`mem`, Memory-Cap im eigenen Cspace) in die Ziel-PD mappen
+/// (PdControl-Cap `cap`). Gibt das volle `Ret` zurück (Fensterbeschreibung wie `MAP`).
+pub fn pd_map_into(cap: u64, mem: u64) -> Ret {
+    invoke(sys::PDCTL, cap, [pdctl::MAP_INTO, mem, 0, 0], 0)
+}
+/// Thread in der Ziel-PD erzeugen (PdControl-Cap `cap`); Stack = ganze `mem`-Region,
+/// `entry`/`arg` wie `spawn`, `prio` 0..=255. Gibt das volle `Ret` zurück: bei `OK`
+/// steht die rohe Thread-Id in `msg[0]`.
+pub fn pd_spawn_into(cap: u64, mem: u64, entry: u64, arg: u64, prio: u64) -> Ret {
+    invoke(sys::PDCTL, cap, [pdctl::SPAWN_INTO, mem, entry, arg], prio)
 }
 /// Programm `index` laden (Loader-Cap `cap`); gibt den Ergebniscode zurück.
 ///
@@ -567,6 +600,16 @@ pub fn ccopy_ipc(src: u64, dst: u64, rights: u64, id: u64, perms: u16) -> u64 {
         return result::ERR_RIGHTS;
     }
     invoke(sys::CCOPY, src, [dst, rights, id, perms as u64], 0).result
+}
+/// **Kanalbeschränkte Kopie einer Endpoint-Cap ableiten** (CHAN): `src` muss eine
+/// Endpoint-Cap halten, `dst` muss frei sein, `(value & mask) == value` mit `mask != 0`
+/// (sonst [`result::ERR_RIGHTS`]). Client-Gatter wie [`ccopy_ipc`]: was der Kernel
+/// sicher abweist, kostet keinen Syscall.
+pub fn chan(src: u64, dst: u64, value: u32, mask: u32) -> u64 {
+    if mask == 0 || (value & !mask) != 0 {
+        return result::ERR_RIGHTS;
+    }
+    invoke(sys::CHAN, src, [dst, u64::from(value), u64::from(mask), 0], 0).result
 }
 /// **Einen Cap im eigenen Cspace verschieben** (A-3.2): `src` → `dst` (muss frei sein). Keine
 /// Ableitung — derselbe Cap, ein anderer Slot.
@@ -839,6 +882,30 @@ mod tests {
     fn csub_spiegel_hat_die_abi_nummer() {
         // Wie oben, fuer CSUB=37 (s. Doku am Spiegel).
         assert_eq!(sys::CSUB, 37);
+    }
+
+    #[test]
+    fn chan_spiegel_hat_die_abi_nummer() {
+        // Wie oben, fuer CHAN=38 (s. Doku am Spiegel).
+        assert_eq!(sys::CHAN, 38);
+    }
+
+    #[test]
+    fn pdctl_subops_spiegeln_die_abi() {
+        // EINZIGE Wahrheit: `caprock_abi::pdctl`. Neue Sub-Operationen landen hier,
+        // sonst ruft der Prozessdienst ins Leere.
+        assert_eq!(pdctl::CREATE, 5);
+        assert_eq!(pdctl::MAP_INTO, 6);
+        assert_eq!(pdctl::SPAWN_INTO, 7);
+    }
+
+    #[test]
+    fn chan_gatter_ohne_syscall() {
+        // Client-Gatter: leere/irrefuehrende Regeln kehren ohne `invoke` mit
+        // ERR_RIGHTS zurueck — wie dokumentiert wird der Syscall gar nicht erst
+        // gestellt (auf dem Host liesse er sich ohnehin nicht stellen).
+        assert_eq!(chan(3, 4, 0, 0), result::ERR_RIGHTS);
+        assert_eq!(chan(3, 4, 0x1_0000, 0xFFFF), result::ERR_RIGHTS);
     }
 
     #[test]

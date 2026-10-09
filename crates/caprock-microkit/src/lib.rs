@@ -1938,6 +1938,18 @@ pub fn dispatch(
     // die Aufrufer-Memory-Cap geprueft; der Kernel kopiert EINMAL in Staging und traut
     // danach nur der Kopie.
     load_image: fn(u64, u64, u32, usize, &[(usize, CapPtr)], usize, usize, u16, u32) -> LadeUebergabe,
+    // PDCTL `SPAWN_INTO` (2026-10-09): wie `spawn`, aber in der Ziel-PD. `(Ziel-PD,
+    // Stack-Cap aus dem Aufrufer-Cspace, Einsprung, Argument, Prioritaet)` ->
+    // `Ok(ThreadId-Raw)` oder `Err(ABI-Code)`. Der Rueckruf legt die VSpace der Ziel-PD
+    // dabei selbst an (beim ersten Thread) und bindet sie VOR der Zulassung — ein Thread
+    // ohne VSpace liefe in der globalen SAS-Map. Laeuft OHNE gehaltenes `CAPS`.
+    spawn_into: fn(usize, CapPtr, usize, usize, u8) -> Result<u64, u64>,
+    // PDCTL `MAP_INTO` (2026-10-09): die `map_frame`/`map_window`-Haelften fuer eine
+    // FREMMDE VSpace, benannt ueber einen Thread darin. Dieselben Vorbedingungen
+    // (isoliert, 4-KiB-Granularitaet), derselbe Rueckgabesinn — nur der Adressraum ist
+    // nicht der des Aufrufers. Laeuft OHNE gehaltenes `CAPS`.
+    map_frame_into: fn(caprock_sched::ThreadId, u64, u64, u8) -> bool,
+    map_window_into: fn(caprock_sched::ThreadId, u64, u64, bool, Option<bool>) -> Option<u64>,
 ) -> usize {
     let nr = frame_reg(frame, reg::SYSNO_RESULT);
 
@@ -1964,7 +1976,7 @@ pub fn dispatch(
             // halbe Bindung, und sie ist gewollt (Debugger/Speicherserver ohne Persönlichkeit).
             redirect::Weiche::Kernel => dispatch_nativ(
                 frame, core, ops, caps, eps, ntfns, load, delete_cap, spawn, debug, bind_irq,
-                load_image, nr,
+                load_image, spawn_into, map_frame_into, map_window_into, nr,
             ),
             redirect::Weiche::Fault(code) => {
                 // **Kein Rückfall auf die native ABI.** Aus dem Entzug einer Cap darf keine
@@ -1980,7 +1992,7 @@ pub fn dispatch(
     }
     dispatch_nativ(
         frame, core, ops, caps, eps, ntfns, load, delete_cap, spawn, debug, bind_irq, load_image,
-        nr,
+        spawn_into, map_frame_into, map_window_into, nr,
     )
 }
 
@@ -2166,6 +2178,10 @@ fn dispatch_nativ(
     bind_irq: fn(u32, usize, u64, usize) -> Result<(), u64>,
     // LXPD-Laufzeitpfad: dito -- der Zweig liegt hier, nicht in `dispatch`.
     load_image: fn(u64, u64, u32, usize, &[(usize, CapPtr)], usize, usize, u16, u32) -> LadeUebergabe,
+    // PDCTL `SPAWN_INTO`/`MAP_INTO` (2026-10-09): dito -- die Zweige liegen hier.
+    spawn_into: fn(usize, CapPtr, usize, usize, u8) -> Result<u64, u64>,
+    map_frame_into: fn(caprock_sched::ThreadId, u64, u64, u8) -> bool,
+    map_window_into: fn(caprock_sched::ThreadId, u64, u64, bool, Option<bool>) -> Option<u64>,
     nr: u64,
 ) -> usize {
     if nr == sys::YIELD {
@@ -2412,7 +2428,7 @@ fn dispatch_nativ(
     // `CCOPY`/`CMOVE`/`SETRECV`/`CSUB` (A-3.2 + Mem-Server-Transport) — wie `CDELETE` vor der
     // generischen Auflösung: sie arbeiten auf **Slots** des eigenen Cspace, nicht auf einem
     // Objekt hinter einer Cap.
-    if nr == sys::CCOPY || nr == sys::CMOVE || nr == sys::SETRECV || nr == CSUB {
+    if nr == sys::CCOPY || nr == sys::CMOVE || nr == sys::SETRECV || nr == CSUB || nr == sys::CHAN {
         let thread = ops.current_id(core);
         let src_slot = frame_reg(frame, reg::EP_BADGE) as usize;
         let dst_slot = frame_reg(frame, reg::MSG0) as usize;
@@ -2501,6 +2517,54 @@ fn dispatch_nativ(
                         }
                     }
                 }
+                sys::CHAN => {
+                    // **Channel-restricted derivation** (`CHAN = 38`): `x1` = source slot
+                    // (endpoint), `MSG0` = free destination slot, `MSG1` = channel value
+                    // (low 32 bits), `MSG2` = channel mask (low 32 bits, non-zero).
+                    // Same slot discipline as `CCOPY` (destination free + in range +
+                    // budget); the rule itself is checked before anything is allocated.
+                    let Some(src) = g.pds.cap_at(pd, src_slot) else {
+                        return deny(result::ERR_BADCAP);
+                    };
+                    let Some((kind, have, _)) = g.cspace.lookup(src) else {
+                        return deny(result::ERR_BADCAP);
+                    };
+                    if dst_slot >= g.pds.cspace_len_von(pd) || g.pds.cap_at(pd, dst_slot).is_some() {
+                        result::ERR_NOSPACE
+                    } else if !g.budget_allows(pd, dst_slot) {
+                        result::ERR_NOSPACE
+                    } else if !matches!(kind, ObjectKind::Endpoint(_)) {
+                        // Only endpoint capabilities have a `CALL` path to gate.
+                        result::ERR_BADCAP
+                    } else if !g.cspace.may_dup(src) {
+                        result::ERR_RIGHTS
+                    } else if matches!(g.cspace.slot_chan(src), Ok(Some(_))) {
+                        // One rule per cap: two `(value, mask)` pairs do not intersect in
+                        // general. Derive from the parent instead.
+                        result::ERR_RIGHTS
+                    } else if mask > u64::from(u32::MAX) || new_badge > u64::from(u32::MAX) {
+                        // High bits set: the caller said more than a channel rule can hold.
+                        result::ERR_RIGHTS
+                    } else {
+                        // Rights are inherited unchanged (narrowing rides along on `CCOPY`
+                        // beforehand); the rule must be well-formed or it is refused here,
+                        // not silently installed as a dead cap. (`mask`/`new_badge` are the
+                        // prelude names for `x3`/`x4`: value, then mask.)
+                        let rule_value = mask as u32;
+                        let rule_mask = new_badge as u32;
+                        match g.cspace.derive_channel(src, have, rule_value, rule_mask) {
+                            Ok(new) => {
+                                if g.install_cap_checked(pd, dst_slot, new) {
+                                    result::OK
+                                } else {
+                                    orphan = Some(new);
+                                    result::ERR_RIGHTS
+                                }
+                            }
+                            Err(_) => result::ERR_NOSPACE,
+                        }
+                    }
+                }
                 _ => {
                     debug_assert!(nr == sys::CCOPY);
                     let Some(src) = g.pds.cap_at(pd, src_slot) else {
@@ -2579,7 +2643,7 @@ fn dispatch_nativ(
     // arbeiten danach ohne CAPS weiter (wie zuvor). Die Werte sind `Copy`/ownend.
     let thread = ops.current_id(core);
     let local = frame_reg(frame, reg::EP_BADGE) as usize;
-    let (pd, kind, rights, badge) = {
+    let (pd, kind, rights, badge, chan) = {
         let g = caps.read();
         let Some(pd) = g.pds.pd_of(thread) else {
             return deny(result::ERR_NOPD);
@@ -2592,8 +2656,10 @@ fn dispatch_nativ(
         };
         // A tagged IPC capability delivers `permissions << 48 | id` instead of the plain badge
         // (`caprock_abi::ipc_perm`); for every other capability this is the badge unchanged.
+        // The channel rule rides along untouched (`None` for unrestricted caps).
         let badge = g.cspace.wire_badge(cap).unwrap_or(badge);
-        (pd, kind, rights, badge)
+        let chan = g.cspace.slot_chan(cap).ok().flatten();
+        (pd, kind, rights, badge, chan)
     }; // CAPS-Read-Lock hier freigegeben
 
     match nr {
@@ -2629,6 +2695,26 @@ fn dispatch_nativ(
             };
             if !rights.contains(need) {
                 return deny(result::ERR_RIGHTS);
+            }
+            // --- Channel gate (`CHAN = 38`) --------------------------------------------------
+            //
+            // A channel-restricted cap passes `CALL`/`CALL_TIMEOUT` only for channels with
+            // `(channel & mask) == value`, where the channel is the low 32 bits of the
+            // caller's `x6` tag word (copied to the server as before — the check reads it,
+            // it does not consume it). Unrestricted caps skip this: their callers may hold
+            // anything in `x6`, today and after this change. `RECV`/`REPLY` never check —
+            // the channel was the *caller's* choice; answering is not sending.
+            //
+            // Checked here, with the other refusals, before any queueing or blocking: a
+            // refused call changes no state and wakes nobody.
+            if nr == sys::CALL || nr == sys::CALL_TIMEOUT {
+                if let Some(rule) = chan {
+                    let channel =
+                        caprock_abi::ipc_chan::channel_of_tag(frame_reg(frame, reg::TAG));
+                    if !rule.allows(channel) {
+                        return deny(result::ERR_RIGHTS);
+                    }
+                }
             }
             // --- Z23 S1: die Tore dieser PD ---------------------------------------------------
             //
@@ -3124,6 +3210,72 @@ fn dispatch_nativ(
             }
             let target = target as usize;
             let subop = frame_reg(frame, reg::MSG0); // x2 = Sub-Operation
+            // --- CREATE names no target: `x1` is a Loader cap, not a PdControl cap --------
+            //
+            // Creation authority is the Loader cap (same as `LOAD`): whoever may load
+            // programs may create empty PDs. The PD starts with no threads, no mappings
+            // and no caps; the caller receives the `PdControl` cap for it in `x4` and
+            // brings it up with `SPAWN_INTO`, `MAP_INTO`, then `START`. Domain is fixed
+            // to UserLand (defense in depth, same bar as the PdControl path below).
+            if subop == pdctl::CREATE {
+                let ObjectKind::Loader { .. } = kind else {
+                    return deny(result::ERR_BADCAP);
+                };
+                if !rights.contains(Rights::WRITE) {
+                    return deny(result::ERR_RIGHTS);
+                }
+                let budget = frame_reg(frame, reg::MSG0 + 1); // x3
+                let dst_slot = frame_reg(frame, reg::MSG0 + 2) as usize; // x4
+                if budget > u64::from(u16::MAX) {
+                    return deny(result::ERR_RIGHTS);
+                }
+                let mut g = caps.write();
+                let Some(pd) = g.pds.pd_of(thread) else {
+                    return deny(result::ERR_NOPD);
+                };
+                if g.pds.domain_of(pd) != Some(Domain::TrustedSas) {
+                    return deny(result::ERR_RIGHTS);
+                }
+                if g.pds.is_quiescing(pd) {
+                    // A new PD is something begun — quiescing PDs begin nothing.
+                    return deny(result::ERR_QUIESCING);
+                }
+                if dst_slot >= g.pds.cspace_len_von(pd) || g.pds.cap_at(pd, dst_slot).is_some()
+                {
+                    return deny(result::ERR_NOSPACE);
+                }
+                if !g.budget_allows(pd, dst_slot) {
+                    return deny(result::ERR_NOSPACE);
+                }
+                let new = match g.pds.create_mit_budget_und_cspace(
+                    Domain::UserLand,
+                    budget as u16,
+                    0,
+                ) {
+                    Ok(pd) => pd,
+                    Err(cspace::CspaceAbweisung::DeckelUeberschritten { .. })
+                    | Err(cspace::CspaceAbweisung::BudgetPasstNicht { .. }) => {
+                        return deny(result::ERR_RIGHTS)
+                    }
+                    Err(_) => return deny(result::ERR_NOSPACE),
+                };
+                // The control cap for the new PD, installed in the *caller* cspace and
+                // charged to the *caller* budget — authority is explicit, never ambient.
+                let ctrl = match g.cspace.install_pd_control(new as u32, Rights::WRITE) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        g.pds.free(new);
+                        return deny(result::ERR_NOSPACE);
+                    }
+                };
+                if !g.install_cap_checked(pd, dst_slot, ctrl) {
+                    g.pds.free(new);
+                    return deny(result::ERR_RIGHTS);
+                }
+                frame_set_reg(frame, reg::SYSNO_RESULT, result::OK);
+                frame_set_reg(frame, reg::MSG0, new as u64);
+                return frame;
+            }
             // Domänen-Policy + Ziel-Thread unter CAPS.read auflösen (dann freigeben).
             let target_tid = {
                 let g = caps.read();
@@ -3135,6 +3287,113 @@ fn dispatch_nativ(
                 }
                 g.pds.thread_of(target)
             };
+            // --- MAP_INTO / SPAWN_INTO: new beginnings, own reporting ----------------------
+            //
+            // Both start something in the target PD, so a quiescing caller is refused
+            // (`ERR_QUIESCING`, same rule as `CALL`): quiescing PDs begin nothing. Both
+            // report richer results than the boolean lifecycle ops below, hence the early
+            // returns instead of the `(subop, target_tid)` match.
+            if subop == pdctl::MAP_INTO || subop == pdctl::SPAWN_INTO {
+                if caps.read().pds.is_quiescing(pd) {
+                    return deny(result::ERR_QUIESCING);
+                }
+            }
+            if subop == pdctl::MAP_INTO {
+                // Map caller-held memory into the *target* VSpace: same kind/perm
+                // resolution as `MAP` (rights-derived perm, object-derived attributes),
+                // then the foreign mapping callbacks. The target needs a thread — its
+                // address space must exist — hence CREATE → SPAWN_INTO → MAP_INTO.
+                let mem_slot = frame_reg(frame, reg::MSG0 + 1) as usize; // x3
+                let (mbase, mlen, mdma, mro_kind, mperm, is_device) = {
+                    let g = caps.read();
+                    let Some(mcap) = g.pds.cap_at(pd, mem_slot) else {
+                        return deny(result::ERR_BADCAP);
+                    };
+                    let Some((mkind, mrights, _)) = g.cspace.lookup(mcap) else {
+                        return deny(result::ERR_BADCAP);
+                    };
+                    let (base, len, dma, ro_kind, device) = match mkind {
+                        ObjectKind::Memory(r) => (r.base, r.len, None, false, false),
+                        ObjectKind::Mmio { phys, len } => (phys, len, None, false, true),
+                        ObjectKind::Dma { phys, len, dir, coherence } => (
+                            phys,
+                            len,
+                            Some(coherence == DmaCoherence::Coherent),
+                            dir == DmaDir::DeviceRead,
+                            true,
+                        ),
+                        _ => return deny(result::ERR_BADCAP),
+                    };
+                    let perm = if mrights.contains(Rights::EXEC) {
+                        2u8
+                    } else if mrights.contains(Rights::WRITE) {
+                        1
+                    } else if mrights.contains(Rights::READ) {
+                        0
+                    } else {
+                        return deny(result::ERR_RIGHTS);
+                    };
+                    let writable = mrights.contains(Rights::WRITE);
+                    (base, len, dma, ro_kind, perm, (device, writable))
+                };
+                let Some(t) = target_tid else {
+                    // No thread, no address space. Not "wrong capability" — the caller
+                    // holds the right ones but knocked too early in the order.
+                    return deny(result::ERR_BADCAP);
+                };
+                let (device, writable) = is_device;
+                if device {
+                    let ro = mro_kind || !writable;
+                    match map_window_into(t, mbase, mlen, ro, mdma) {
+                        Some(iova) => {
+                            frame_set_reg(frame, reg::SYSNO_RESULT, result::OK);
+                            frame_set_reg(frame, reg::MSG0, mbase);
+                            frame_set_reg(frame, reg::MSG1, mlen);
+                            frame_set_reg(frame, reg::MSG2, iova);
+                        }
+                        None => frame_set_reg(frame, reg::SYSNO_RESULT, result::ERR_BADCAP),
+                    }
+                } else {
+                    let ok = map_frame_into(t, mbase, mlen, mperm);
+                    if ok {
+                        frame_set_reg(frame, reg::SYSNO_RESULT, result::OK);
+                        frame_set_reg(frame, reg::MSG0, mbase);
+                        frame_set_reg(frame, reg::MSG1, mlen);
+                        frame_set_reg(frame, reg::MSG2, 0);
+                    } else {
+                        frame_set_reg(frame, reg::SYSNO_RESULT, result::ERR_BADCAP);
+                    }
+                }
+                return frame;
+            }
+            if subop == pdctl::SPAWN_INTO {
+                // Spawn a thread in the *target* PD from caller-held memory: same stack
+                // checks as `SPAWN` (the callback shares them), whole donated region as
+                // the stack, priority explicit in `x6`. Sub-windows in foreign PDs stay a
+                // named gap (register pressure); the first thread takes the whole region.
+                let mem_slot = frame_reg(frame, reg::MSG0 + 1) as usize; // x3
+                let entry = frame_reg(frame, reg::MSG0 + 2) as usize; // x4
+                let arg = frame_reg(frame, reg::MSG0 + 3) as usize; // x5
+                let prio_raw = frame_reg(frame, reg::TAG); // x6
+                if prio_raw > u64::from(u8::MAX) {
+                    return deny(result::ERR_RIGHTS);
+                }
+                let mem = {
+                    let g = caps.read();
+                    let Some(mcap) = g.pds.cap_at(pd, mem_slot) else {
+                        return deny(result::ERR_BADCAP);
+                    };
+                    mcap
+                };
+                match spawn_into(target, mem, entry, arg, prio_raw as u8) {
+                    Ok(tid_raw) => {
+                        frame_set_reg(frame, reg::SYSNO_RESULT, result::OK);
+                        frame_set_reg(frame, reg::MSG0, tid_raw);
+                    }
+                    Err(code) => frame_set_reg(frame, reg::SYSNO_RESULT, code),
+                }
+                return frame;
+            }
             let ok = match (subop, target_tid) {
                 (pdctl::PAUSE, Some(t)) => {
                     ops.pause(t);

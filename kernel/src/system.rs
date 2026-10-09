@@ -1344,6 +1344,9 @@ fn syscall(frame: *mut TrapFrame) -> *mut TrapFrame {
         // aus Aufrufer-RAM statt aus dem Boot-Archiv — Geometrie hat der Dispatch bereits gegen
         // die Aufrufer-Memory-Cap geprüft, der Verifizierer kopiert EINMAL nach Staging.
         sys_load_image_uebergeben,
+        dispatch_spawn_into,      // PDCTL SPAWN_INTO: Thread in fremder PD (VSpace kommt mit)
+        dispatch_map_frame_into,  // PDCTL MAP_INTO, RAM-Haelfte (fremde VSpace)
+        dispatch_map_window_into, // PDCTL MAP_INTO, Geraete-Haelfte (fremde VSpace)
     );
     // Der Syscall kann den laufenden Thread gewechselt haben (block/exit) -> FP-Trap
     // + VSpace passend zum neuen aktuellen Thread setzen.
@@ -3910,6 +3913,38 @@ fn dispatch_spawn(
     prio: u8,
     sub: u64,
 ) -> Result<u64, u64> {
+    let (base, _len, stack_top) = spawn_stack_validated(pd, cap, sub)?;
+    // **D0 wörtlich: parken -- binden -- zulassen.** Ein Thread, der lauffähig ist, bevor er seine
+    // PD hat, macht seinen ersten Syscall mit LEEREM Cspace. Das hat zehn Tage gekostet, und die
+    // Rate war 0,018 %.
+    let parked = spawn_with_stack_parked(entry, arg, base, stack_top, prio)
+        .ok_or(caprock_abi::result::ERR_NOSPACE)?;
+    bind_pd_parked(&parked, pd);
+    // Die Stack-Cap am TCB vermerken, BEVOR der Thread laufen darf: danach ist sie gegen
+    // `CDELETE` gesperrt (`ERR_INUSE`). Andersherum gäbe es ein Fenster, in dem der Thread läuft
+    // und seine Cap löschbar wäre -- und ihre Finalisierung gibt den Speicher an den Allokator
+    // zurück, unter den Füßen eines laufenden Stapels.
+    let tid = admit(parked).ok_or(caprock_abi::result::ERR_NOSPACE)?;
+    if !record_stack_cap(tid, cap, base, _len) {
+        // **Fail-closed.** Ohne Eintrag ist die Stack-Cap loeschbar, waehrend der Thread auf ihr
+        // laeuft -- die Finalisierung gaebe den Speicher an den Allokator zurueck, unter den
+        // Fuessen eines laufenden Stapels. Lieber kein Thread als ein ungeschuetzter.
+        kill_local(tid);
+        return Err(caprock_abi::result::ERR_NOSPACE);
+    }
+    Ok(tid.to_raw())
+}
+
+/// The validation half of [`dispatch_spawn`], shared with `dispatch_spawn_into` (PDCTL
+/// `SPAWN_INTO`): capability lookup, sub-window narrowing, and the kernel-answerable
+/// stack questions — everything that refuses, before anything is allocated or admitted.
+/// Returns `(region base, region len, stack top)`. One source for both spawn paths, so a
+/// fix to a check cannot land in one and miss the other.
+fn spawn_stack_validated(
+    pd: usize,
+    cap: caprock_cap::CapPtr,
+    sub: u64,
+) -> Result<(u64, u64, u64), u64> {
     use caprock_cap::spawncheck::{check_stack, sub_region, StackProposal, StackRefusal};
     // Alles, was aus der Cap und der PD-Tabelle kommt, unter EINEM Lesezugriff -- sonst könnte
     // sich die Zahl zwischen zwei Blicken ändern, und die Schranke wäre eine über einem
@@ -3971,25 +4006,144 @@ fn dispatch_spawn(
         StackRefusal::ThreadLimit => caprock_abi::result::ERR_THREAD_LIMIT,
         StackRefusal::OutsideCap => caprock_abi::result::ERR_SUBREGION,
     })?;
-    // **D0 wörtlich: parken -- binden -- zulassen.** Ein Thread, der lauffähig ist, bevor er seine
-    // PD hat, macht seinen ersten Syscall mit LEEREM Cspace. Das hat zehn Tage gekostet, und die
-    // Rate war 0,018 %.
-    let parked = spawn_with_stack_parked(entry, arg, region.base(), stack_top, prio)
-        .ok_or(caprock_abi::result::ERR_NOSPACE)?;
-    bind_pd_parked(&parked, pd);
-    // Die Stack-Cap am TCB vermerken, BEVOR der Thread laufen darf: danach ist sie gegen
-    // `CDELETE` gesperrt (`ERR_INUSE`). Andersherum gäbe es ein Fenster, in dem der Thread läuft
-    // und seine Cap löschbar wäre -- und ihre Finalisierung gibt den Speicher an den Allokator
-    // zurück, unter den Füßen eines laufenden Stapels.
-    let tid = admit(parked).ok_or(caprock_abi::result::ERR_NOSPACE)?;
-    if !record_stack_cap(tid, cap, region.base(), region.len()) {
-        // **Fail-closed.** Ohne Eintrag ist die Stack-Cap loeschbar, waehrend der Thread auf ihr
-        // laeuft -- die Finalisierung gaebe den Speicher an den Allokator zurueck, unter den
-        // Fuessen eines laufenden Stapels. Lieber kein Thread als ein ungeschuetzter.
+    Ok((region.base(), region.len(), stack_top))
+}
+
+/// PDCTL `SPAWN_INTO` (2026-10-09): spawn a thread in a *foreign* PD from caller-held
+/// memory. Same stack checks as [`dispatch_spawn`] (shared helper — a check fixed in one
+/// path cannot miss the other), whole donated region as the stack, then the one step
+/// `SPAWN` never needs: the target address space.
+///
+/// The VSpace is reused from the target's first thread if it has one, else created fresh
+/// (uncolored — runtime PDs run uncolored; boot-time coloring stays manifest policy).
+/// It is bound **before** admission (`set_vspace_of`, after the internal `fp_reset_slot`
+/// in `spawn_with_stack_parked`): a thread admitted without a VSpace would run in the
+/// global SAS map (`vspace_of == 0`), and an `asid == 0` inheritance is refused for the
+/// same reason — a fresh space is safer than a shared nothing. The donated stack needs
+/// no explicit mapping: normal RAM is identity-mapped in every user VSpace via the
+/// shared global tables (`vspace_create_base` runs in the global map), exactly as on the
+/// own-PD path — which maps nothing either.
+///
+/// Cleanup mirrors `spawn_isolated_parked`: a VSpace created here and left thread-less by
+/// a later failure is torn down; a reused one is never touched.
+fn dispatch_spawn_into(
+    target: usize,
+    cap: caprock_cap::CapPtr,
+    entry: usize,
+    arg: usize,
+    prio: u8,
+) -> Result<u64, u64> {
+    use caprock_abi::result::*;
+    // Resolve the address space first: nothing is allocated yet, so every refusal is free.
+    // Returns `(asid, l1, fresh)` — `fresh` tells the failure paths whether this VSpace is
+    // ours to tear down again (a reused one is never touched).
+    let (asid, l1, fresh): (u16, u64, bool) = match CAPS.read().pds.thread_of(target) {
+        Some(t) => {
+            let packed = vspace_of(t.slot());
+            let a = (packed >> 48) as u16;
+            if a == 0 {
+                match create_vspace() {
+                    Some((a2, l2)) => (a2, l2, true),
+                    None => return Err(ERR_NOSPACE),
+                }
+            } else {
+                (a, packed & 0x0000_FFFF_FFFF_FFFF, false)
+            }
+        }
+        None => match create_vspace() {
+            Some((a, l)) => (a, l, true),
+            None => return Err(ERR_NOSPACE),
+        },
+    };
+    // A VSpace created here and left thread-less by a later failure is torn down again;
+    // anything else is the target's to keep. Same cleanup level as `spawn_isolated_parked`.
+    let rueckbau = |asid: u16, fresh: bool| {
+        if fresh && CAPS.read().pds.thread_count(target) == 0 {
+            vspace_teardown(asid);
+        }
+    };
+    let (base, len, stack_top) = match spawn_stack_validated(target, cap, 0) {
+        Ok(v) => v,
+        Err(e) => {
+            rueckbau(asid, fresh);
+            return Err(e);
+        }
+    };
+    let parked = match spawn_with_stack_parked(entry, arg, base, stack_top, prio) {
+        Some(p) => p,
+        None => {
+            rueckbau(asid, fresh);
+            return Err(ERR_NOSPACE);
+        }
+    };
+    // Bind the address space BEFORE admission (and after the internal `fp_reset_slot` in
+    // `spawn_with_stack_parked` — same order as the isolated path): a thread admitted
+    // without a VSpace would run in the global SAS map.
+    set_vspace_of(parked_tid(&parked).slot(), ((asid as u64) << 48) | l1);
+    bind_pd_parked(&parked, target);
+    let tid = match admit(parked) {
+        Some(t) => t,
+        None => {
+            rueckbau(asid, fresh);
+            return Err(ERR_NOSPACE);
+        }
+    };
+    if !record_stack_cap(tid, cap, base, len) {
+        // Fail-closed, like `dispatch_spawn`: rather no thread than an unprotected one.
         kill_local(tid);
-        return Err(caprock_abi::result::ERR_NOSPACE);
+        rueckbau(asid, fresh);
+        return Err(ERR_NOSPACE);
     }
     Ok(tid.to_raw())
+}
+
+/// PDCTL `MAP_INTO`, plain-RAM half (2026-10-09): `map_frame` for a foreign address
+/// space named by a thread in it. Same preconditions (isolated, non-empty 4-KiB
+/// granularity), same result sense — only the address space is not the caller's.
+/// An `asid == 0` target (global SAS map) is refused, never inherited.
+fn dispatch_map_frame_into(target: ThreadId, base: u64, len: u64, perm_code: u8) -> bool {
+    let asid = (vspace_of(target.slot()) >> 48) as u16;
+    if asid == 0 || len == 0 || len % 4096 != 0 {
+        return false;
+    }
+    let perm = match perm_code {
+        2 => hal::mmu::UserPerm::Rx,
+        1 => hal::mmu::UserPerm::Rw,
+        _ => hal::mmu::UserPerm::Ro,
+    };
+    vspace_map(
+        asid,
+        &|pa| crate::addr::Va::for_syscall_map(SyscallMapWitness(()), pa),
+        crate::addr::Pa::new(base),
+        len,
+        perm,
+    )
+}
+
+/// PDCTL `MAP_INTO`, device half (2026-10-09): `map_window` for a foreign address space.
+/// Object-derived attributes (device vs. DMA, IOVA vs. identity) behave exactly as on the
+/// own-PD path; an invalid target address space fails the same way (`None`).
+fn dispatch_map_window_into(
+    target: ThreadId,
+    base: u64,
+    len: u64,
+    ro: bool,
+    dma: Option<bool>,
+) -> Option<u64> {
+    if len == 0 || len % 4096 != 0 {
+        return None;
+    }
+    let kind = match dma {
+        None => MappingKind::Device { ro },
+        Some(coherent) => MappingKind::Dma { coherent },
+    };
+    if !map_region_into_thread(target, base, len, kind) {
+        return None;
+    }
+    Some(match dma {
+        Some(_) => assigned_iova(base).unwrap_or(0),
+        None => 0,
+    })
 }
 
 // ================================================================================================
