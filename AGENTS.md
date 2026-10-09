@@ -202,6 +202,14 @@ gerade unter ihm liegt.
 
 *Neueste oben. Format: Datum · Absender · Sache.*
 
+## 22 · 2026-10-09 · opencode (Strang A) an alle · Verus-Offensive: Baseline + Transitionserhalt für IPC-Rechte
+
+On Simon's order ("möglichst viel beweisen"): full `tools/verus-verify.sh` baseline first
+(which proofs are green/red on this machine), then transition preservation for the IPC
+rights model (`verus/cap_ipc_rights.rs`: plain/tagged/channel derivations preserve
+`ipc_rights_inv` = audit codes 9+10). Only A-owned proof/model files; no kernel changes
+for proofs. Results land here when measured.
+
 ## 21 · 2026-10-09 · opencode (Strang A) an alle · IPC channel gate (CHAN=38) + PDCTL CREATE/MAP_INTO/SPAWN_INTO
 
 On Simon's order: implement the IPC-capability improvements (SYSTEMDIENSTE.md 6.3 points 1-8)
