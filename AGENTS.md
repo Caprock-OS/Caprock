@@ -202,6 +202,55 @@ gerade unter ihm liegt.
 
 *Neueste oben. Format: Datum · Absender · Sache.*
 
+## 22 · 2026-10-09 · opencode (Strang A) an alle · ARM-Parität + ACPI + IRT-Übergabe: 8 Stränge auf der Hauptlinie
+
+On Simon's order: port everything x86-can-but-ARM-cannot to ARM, add ACPI support for
+both arches, and hand DTB-or-ACPI to the IRT (Initial Root Task). Runs on the main line
+(`/home/simon/Musik/Caprock`), reusing the three existing Snapdragon worktrees.
+
+| # | Strand | Baum/Branch | Umfang (NUR diese Dateien) |
+|---|---|---|---|
+| 1 | GICv3 | `Caprock-snapdragon/gicv3` `snapdragon/gicv3` | `crates/caprock-hal/src/aarch64/gic*.rs,intc.rs`, GICv2-Fallback, QEMU `virt,gic-version=3`-Nachweis |
+| 2 | MSI-X + Geräte-PD | NEU `msi-devpd` `snapdragon/msi-devpd` | `hal/src/aarch64/pcie.rs` (MSI), `bind_irq`-Verdrahtung, `offer_driver_device` aus ARM-Boot, erster virtio-Nachweis |
+| 3 | DTB-Plattform + ARM-ACPI | `platform-dtb` `snapdragon/platform-dtb` | `caprock-dtb` (GIC/Timer/FB/PSCI), NEU `caprock-acpi` (RSDP/XSDT/MADT/GTDT, host-getestet, beide Bögen künftig) |
+| 4 | UEFI-Start ARM | `uefi-stub` `snapdragon/uefi-stub` | `boot/uefi-aarch64`, `caprock-handover`, `uefi_boot.rs`, `test-qemu-uefi.sh`-Nachweis |
+| 5 | IRT-Übergabe | NEU `irt-handover` `snapdragon/irt-handover` | Kernel-Passthrough (nur Grenzen, kein Parsen) + `programs/trusted/init` (Empfang/Parsen/Melden). Interface-Vertrag unten |
+| 6 | ARM-Gatter | NEU `gates-arm` `snapdragon/gates-arm` | `kstack`/`ustack`/`sperre`-Urteile + Bericht auf ARM (C9d) |
+| 7 | ARM-Wache | NEU `guard-arm` `snapdragon/guard-arm` | Guard-Seiten auf ARM (`guard_unterstuetzt`, map/unmap) |
+| 8 | LXPD-ARM | NEU `lxpd-arm` `snapdragon/lxpd-arm` | LXPD-Bootpfad + Verify-am-Boot auf ARM bis erster Treiberstart |
+
+Protokoll (wie Mitteilung 17): disjunkte Dateilisten (wer ausserhalb schreibt, wird
+revertiert), **niemand committet ausser dem Integrator (opencode)**, niemand pusht,
+Evidence (Host-Tests, Builds, QEMU-Marker) + Diff-Beschreibung zurück. Schwere
+QEMU-Läufe gestaffelt (max 2 parallel, KVM-Kontention), Logs nach `build/diag/`.
+HAL ist B-Besitz: HAL-Änderungen laufen im Worktree, Integration erst nach B-Review —
+hiermit gemeldet. Fremdes (`lxpd/*` Hauptlinie, Keys, Suiten) unangetastet.
+
+## 23 · 2026-10-09 · Simon (via opencode) an Stränge 2–5 · Boot-Vorgabe: Plattentreiber vom Bootloader + DTB/ACPI dazu
+
+Der Plattentreiber kommt beim Boot vom Bootloader (GRUB-Modul / UEFI-Image), nicht von der
+Platte; DTB oder ACPI liegen beim Boot vor und werden mit übergeben (Handover-Struktur).
+Kernel: nur Durchreichen mit Grenzprüfung. Auswertung: Treiber-PD + IRT. Die Boot-Platte
+wird aus DTB/ACPI + Bootmodul-Info bestimmt, nie aus der Fundreihenfolge. Festgehalten in
+`Caprock-Treiber/snapdragon-terminal-plan.md` („Boot: Plattentreiber vom Bootloader").
+
+## 24 · 2026-10-09 · Simon (via opencode) an Stränge 3+5 · Speicherschutz: FB/ACPI/MMIO nie allozieren, UEFI-Regionen sind die Quelle
+
+Befund: Der UEFI-Pfad meldet die Speicherkarte (`regions[]`), speist sie aber nicht in den
+Allokator — der nähme weiter das DTB-Gesamtfenster (Framebuffer/ACPI-Domänen inklusive).
+Regel (Plan „Speicherschutz beim Boot"): UEFI-Framebuffer, ACPI-NVS/Runtime, MMIO-Fenster
+und reservierte Tabellen werden nie beschrieben/abgegeben/alloziert; auf UEFI-Boot sind
+die Handover-`regions[]` (nur USABLE, minus FB-/Modul-/Kernel-Spannen, gezählt gemeldet)
+DIE Allokator-Quelle, auf Direkt-Boot DTB-`reserved-memory` gleichwertig. Umsetzung folgt
+nach Strang-5-Integration als dessen Vervollständigung (reine Bereichs-Subtraktion,
+host-testbar); x86-Bereichsliste (`init_mem_regions`) als Vorbild.
+
+Interface-Vertrag 4↔5 (fest, kein Drift): `caprock-handover`-Crate aus Strang 4 ist DIE
+Übergabe (`acpi_rsdp: Option<u64>`, `dtb: Option<(base, len)>`, Framebuffer). Strang 5
+arbeitet bis dahin gegen eine lokale Stub-Kopie und konvergiert bei Integration.
+SMMU-Level-2 unter QEMU bleibt unbeobachtbar (kein emuliertes DMA durch die SMMU) —
+kein Strang, benannte Lücke.
+
 ## 20 · 2026-09-11 · opencode (Linux-Compat) an alle · Rewrite-Vorfeld: Fix committet (765d662), Belege grün außer lastkorreliertem Timing-Rot
 
 Commit `765d662` (nur 4 eigene Dateien, nichts gepusht): Mitteilung 19 + microkit-Fix.
