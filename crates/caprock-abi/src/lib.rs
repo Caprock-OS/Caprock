@@ -572,6 +572,24 @@ pub mod sys {
     ///
     /// Nummer 37 = erste freie nach FORK/EXEC + Debugger-v2 + LOAD_IMAGE.
     pub const CSUB: u64 = 37;
+
+    /// **Derive a channel-restricted copy of an endpoint capability** (`CHAN`, 2026-10-09).
+    ///
+    /// `x1` = source slot (endpoint) · `x2` = free destination slot · `x3` = channel value
+    /// (low 32 bits) · `x4` = channel mask (low 32 bits, must be non-zero).
+    ///
+    /// The result carries the rule `(channel & mask) == value`, checked by the kernel on
+    /// every `CALL`/`CALL_TIMEOUT` through it (channel = low 32 bits of the `x6` tag word).
+    /// One rule per cap: deriving onto an already restricted cap is refused. The rule is
+    /// preserved by `copy`/`move`/`derive_ipc` and never widened — like `perms`, it lives
+    /// at the slot, and `audit_cdt` code 10 checks its well-formedness.
+    ///
+    /// Outcomes: `OK` · `ERR_BADCAP` (no cap / no endpoint cap / destination out of range) ·
+    /// `ERR_NOSPACE` (destination occupied, budget, table) · `ERR_RIGHTS` (mask == 0,
+    /// already restricted, or no DUP on a tagged source).
+    ///
+    /// Nummer 38 = erste freie nach CSUB.
+    pub const CHAN: u64 = 38;
 }
 
 /// Rights and frame-word names for the debug syscalls (Z6b).
@@ -642,6 +660,22 @@ pub mod pdctl {
     pub const RESUME: u64 = 3;
     /// Der Ziel-PD ein CPU-Budget zuweisen (Arg: SchedContext-Cap-Slot in `x3`).
     pub const ASSIGN_BUDGET: u64 = 4;
+    /// **Create a UserLand PD** (2026-10-09): `x3` = cap budget (0 = default),
+    /// `x4` = free caller slot receiving the new `PdControl` cap. Returns `OK` with the
+    /// new PD index in `MSG0`. The PD starts empty (no threads, no mappings, no caps);
+    /// bring it up with `SPAWN_INTO`, `MAP_INTO`, then `START`.
+    pub const CREATE: u64 = 5;
+    /// **Map caller-held memory into the target PD** (2026-10-09): `x3` = memory-cap slot
+    /// in the *caller* cspace (whole region, rights-derived perm like [`super::sys::MAP`]).
+    /// The target needs at least one thread (its address space must exist) — hence the
+    /// order CREATE → SPAWN_INTO → MAP_INTO → START. Refusals mirror `MAP`.
+    pub const MAP_INTO: u64 = 6;
+    /// **Spawn a thread in the target PD** (2026-10-09): `x3` = memory-cap slot in the
+    /// *caller* cspace (stack, whole region), `x4` = entry, `x5` = arg, `x6` = priority
+    /// (low 8 bits, rest must be zero). Same stack checks as [`super::sys::SPAWN`]; the
+    /// stack region is mapped into the target address space (created on first use).
+    /// Sub-windows in foreign PDs are a named gap (register pressure).
+    pub const SPAWN_INTO: u64 = 7;
 }
 
 /// Anzahl der Nachrichten-Datenwörter (Register `x2`..`x5`).
@@ -711,6 +745,58 @@ pub mod ipc_perm {
     /// `true` if `id` fits the id field (a tagged capability rejects wider badges).
     pub const fn id_fits(id: u64) -> bool {
         id & !ID_MASK == 0
+    }
+}
+
+/// **Send-time channel rule for endpoint capabilities** (`CHAN = 38`, 2026-10-09).
+///
+/// A channel-restricted cap carries `(value, mask)`; a `CALL`/`CALL_TIMEOUT` through it
+/// passes only if `(channel & mask) == value`, where `channel` is the low 32 bits of the
+/// caller's `x6` tag word. The check is the *same* shape as an MMIO address decode
+/// (`(addr & mask) == value`): one interval or one exact channel per rule, constant time,
+/// no lists in the kernel.
+///
+/// ```text
+/// mask = 0xFFFF_FFFF, value = n   → exactly channel n
+/// mask = 0xFFFF_FF00, value = c   → the 256-channel block starting at c
+/// mask = 0, any value             → refused at derivation (a rule that matches
+///                                   everything or nothing is a caller bug, not a rule)
+/// ```
+///
+/// Identity is cap identity: the server already receives the unforgable badge word
+/// (`perms << 48 | id`, see [`ipc_perm`]), and the tag word (including the channel) is
+/// copied to it. There is deliberately no separate "sender PD" word — authority is the
+/// cap held, not the speaker.
+///
+/// Out of scope, named: `SIGNAL` carries no per-signal word (badge-OR semantics), so its
+/// badge stays the coarse channel; queue-full and timing remain observable by design.
+pub mod ipc_chan {
+    /// A channel rule: `(channel & mask) == value` passes.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Rule {
+        /// Required value after masking.
+        pub value: u32,
+        /// Significant channel bits. Never zero (enforced at derivation).
+        pub mask: u32,
+    }
+
+    impl Rule {
+        /// `true` if `channel` passes this rule. Pure, total, branchless-comparable —
+        /// this is the function the Verus model pins down.
+        pub const fn allows(self, channel: u32) -> bool {
+            (channel & self.mask) == self.value
+        }
+
+        /// `true` if the stored rule is well-formed (mask non-zero and value within mask).
+        /// `audit_cdt` code 10 checks this over the live table.
+        pub const fn is_wellformed(self) -> bool {
+            self.mask != 0 && (self.value & !self.mask) == 0
+        }
+    }
+
+    /// Extract the channel from a `CALL` tag word (low 32 bits of `x6`).
+    pub const fn channel_of_tag(tag: u64) -> u32 {
+        tag as u32
     }
 }
 
@@ -1060,9 +1146,9 @@ pub mod fork {
     /// wenige Segmente), klein genug, dass die Kopierschleife unter der
     /// Sperrhaltedauer-Marke bleibt (Aufrufer schleift, preemptibel).
     pub const SNAPSHOT_MAX_BYTES: u64 = 8 * 1024 * 1024;
-    /// Naechste freie Syscall-Nummer nach FORK/EXEC + Debugger-v2 + LOAD_IMAGE + CSUB.
-    /// `38` ist frei; `4` bleibt historische Luecke, nie vergeben.
-    pub const NAECHSTE_FREIE_SYSCALL: u64 = 38;
+    /// Naechste freie Syscall-Nummer nach FORK/EXEC + Debugger-v2 + LOAD_IMAGE + CSUB + CHAN.
+    /// `39` ist frei (`38` ist seit 2026-10-09 `CHAN`); `4` bleibt historische Luecke, nie vergeben.
+    pub const NAECHSTE_FREIE_SYSCALL: u64 = 39;
 }
 
 // --- Host-nahe Pruefung der Nummernvergabe (A2-Rest) ------------------------------------------
@@ -1113,14 +1199,16 @@ mod nummern {
     #[test]
     fn fork_exec_belegen_die_luecke_38_bleibt_frei() {
         // Prozessmodell: die Luecke `31`/`32` ist geschlossen, `36` ist LOAD_IMAGE,
-        // `37` ist CSUB, `38+` bleibt frei. `4` bleibt historische Luecke, nie vergeben.
+        // `37` ist CSUB, `38` ist seit 2026-10-09 CHAN, `39+` bleibt frei.
+        // `4` bleibt historische Luecke, nie vergeben.
         // Kollision = Baufehler: faellt dieser Test, ist eine Nummer doppelt
         // vergeben (s. naechsten Test).
         assert_eq!(sys::FORK_SNAPSHOT, 31);
         assert_eq!(sys::EXEC_REPLACE, 32);
         assert_eq!(sys::LOAD_IMAGE, 36);
         assert_eq!(sys::CSUB, 37);
-        assert_eq!(super::fork::NAECHSTE_FREIE_SYSCALL, 38);
+        assert_eq!(sys::CHAN, 38);
+        assert_eq!(super::fork::NAECHSTE_FREIE_SYSCALL, 39);
         assert_eq!(super::fork::SNAPSHOT_MAX_BYTES, 8 * 1024 * 1024);
         // Kein bekannter Syscall liegt auf/ueber 38 — wuerde einer hinzukommen, ohne
         // diesen Test zu erweitern, schwiege die Einmaligkeitspruefung nicht, aber die
@@ -1163,8 +1251,9 @@ mod nummern {
             sys::EXEC_REPLACE,
             sys::LOAD_IMAGE,
             sys::CSUB,
+            sys::CHAN,
         ] {
-            assert!(n < 38, "Syscall-Nummer {n} liegt auf/ueber der naechsten freien 38");
+            assert!(n < 39, "Syscall-Nummer {n} liegt auf/ueber der naechsten freien 39");
         }
     }
 
@@ -1208,6 +1297,7 @@ mod nummern {
             sys::EXEC_REPLACE,
             sys::LOAD_IMAGE,
             sys::CSUB,
+            sys::CHAN,
         ];
         let mut sortiert = alle;
         sortiert.sort_unstable();
@@ -1221,6 +1311,29 @@ mod nummern {
             );
             i += 1;
         }
+    }
+
+    #[test]
+    fn chan_channel_rule_is_pure_and_total() {
+        use super::ipc_chan::{channel_of_tag, Rule};
+        // exact channel
+        let only7 = Rule { value: 7, mask: 0xFFFF_FFFF };
+        assert!(only7.allows(7));
+        assert!(!only7.allows(8));
+        assert!(only7.is_wellformed());
+        // 256-channel block
+        let block = Rule { value: 0x1200, mask: 0xFF00 };
+        assert!(block.allows(0x12AB));
+        assert!(!block.allows(0x1300));
+        assert!(block.is_wellformed());
+        // mask 0 is never well-formed (matches-all or matches-nothing by accident)
+        assert!(!Rule { value: 0, mask: 0 }.is_wellformed());
+        // value bits outside the mask are a caller bug, not a rule
+        assert!(!Rule { value: 0x1_0000, mask: 0xFFFF }.is_wellformed());
+        // channel comes from the low 32 bits of the CALL tag word; high bits
+        // (including GRANT_FLAG) are not part of the channel
+        assert_eq!(channel_of_tag(0x8000_0000_0000_0042), 0x42);
+        assert_eq!(channel_of_tag(u64::MAX), u32::MAX);
     }
 
     #[test]

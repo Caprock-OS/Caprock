@@ -1,6 +1,7 @@
 //! Capability-Space: Slot-Tabelle + Capability-Derivation-Tree (CDT).
 
 use crate::object::{DmaCoherence, DmaDir, Object, ObjectKind};
+use caprock_abi::ipc_chan;
 use caprock_abi::ipc_perm;
 use caprock_mem::{MemoryCap, PhysAllocator, PhysRegion, Rights};
 use caprock_slab::Slab;
@@ -95,6 +96,17 @@ pub struct CapSlot {
     /// object. A derivation can only clear bits (`derive_ipc` intersects), so along any path in
     /// the CDT the mask never grows -- `audit_cdt` code 9 checks that.
     pub(crate) perms: Option<u16>,
+    /// **Send-time channel rule** (see `caprock_abi::ipc_chan`): `Some(rule)` marks this slot
+    /// as a channel-restricted endpoint capability; `CALL`/`CALL_TIMEOUT` through it passes
+    /// only for channels with `(channel & rule.mask) == rule.value`. `None` is unrestricted
+    /// and behaves exactly as before.
+    ///
+    /// It lives at the slot for the same reason as `perms`, and the same monotonicity holds
+    /// in the only form a `(value, mask)` pair allows: the rule is set exactly once
+    /// ([`derive_channel`](Self::derive_channel) refuses an already restricted source) and
+    /// preserved by every derivation afterwards — so along any CDT path the accepted set
+    /// never grows. `audit_cdt` code 10 checks well-formedness.
+    pub(crate) chan: Option<ipc_chan::Rule>,
     pub(crate) mdb: Mdb,
 }
 
@@ -107,6 +119,7 @@ impl CapSlot {
         badge: 0,
         subregion: None,
         perms: None,
+        chan: None,
         mdb: Mdb::EMPTY,
     };
 }
@@ -339,6 +352,21 @@ pub(crate) fn teilfenster_rechnen(
         return Err(CapError::Subregion);
     }
     Ok(PhysRegion::new(base, len))
+}
+
+/// Scan-Praedikat fuer [`CapSpace::audit_cdt`] Code 10: jede Kanalregel auf einem
+/// belegten Slot ist wohlgeformt — als freie Funktion ueber einem Slice, damit sie ohne
+/// `CapSpace` (und damit ohne `Slab`, dessen Anbindung `unsafe` ist) geprueft werden kann.
+///
+/// Regeln entstehen nur wohlgeformt ([`CapSpace::derive_channel`]) und wandern nur
+/// unveraendert (`copy` uebernimmt); Missbildung heisst Speicherfehler, nicht Ableitung.
+/// Der Test unten faehrt beide Ausgaenge — ein Pruefer ohne Gegenprobe gaelte hier nichts.
+fn chan_audit_clean(slots: &[CapSlot]) -> bool {
+    slots
+        .iter()
+        .filter(|s| s.used)
+        .filter_map(|s| s.chan)
+        .all(|rule| rule.is_wellformed())
 }
 
 /// `child` vorne in die Kinderliste von `parent` einhängen — die reine Verkettung von
@@ -716,9 +744,11 @@ impl CapSpace {
         let badge = self.slots[s].badge;
         let fenster = self.slots[s].subregion;
         let perms = self.slots[s].perms;
+        let chan = self.slots[s].chan;
         let dst = self.alloc_slot(obj, new_rights, badge)?;
         self.slots[dst].subregion = fenster;
         self.slots[dst].perms = perms;
+        self.slots[dst].chan = chan;
         self.objects[obj].refcount += 1;
         self.link_child(s, dst);
         Ok(self.ptr(dst))
@@ -803,6 +833,55 @@ impl CapSpace {
             self.slots[dst.slot].badge &= ipc_perm::ID_MASK;
         }
         self.slots[dst.slot].perms = Some(have & mask);
+        Ok(dst)
+    }
+
+    /// The channel rule of the slot behind `ptr`: `Ok(None)` for an unrestricted capability.
+    pub fn slot_chan(&self, ptr: CapPtr) -> Result<Option<ipc_chan::Rule>, CapError> {
+        let s = self.resolve(ptr)?;
+        Ok(self.slots[s].chan)
+    }
+
+    /// **Derive a channel-restricted copy of an endpoint capability** (`CHAN`).
+    ///
+    /// The result points at the same endpoint object, carries `rights` (intersected with the
+    /// source, like [`copy`](Self::copy)), inherits badge, permission mask and subregion
+    /// unchanged, and gains the channel rule `(channel & mask) == value`.
+    ///
+    /// * The source must be an endpoint capability — other kinds have no `CALL` path to
+    ///   gate ([`CapError::Invalid`]).
+    /// * The rule must be well-formed: `mask != 0` and `value` within `mask`
+    ///   ([`CapError::Invalid`]); a vacuous or misleading rule is a caller bug, not a rule.
+    /// * At most one rule per cap: an already restricted source is refused
+    ///   ([`CapError::Invalid`]) — two `(value, mask)` pairs do not intersect in general,
+    ///   so narrowing would silently mean something else. Derive from the parent instead.
+    /// * A tagged source needs [`ipc_perm::DUP`](caprock_abi::ipc_perm::DUP)
+    ///   ([`CapError::Invalid`] otherwise; the dispatch maps it to `ERR_RIGHTS`).
+    pub fn derive_channel(
+        &mut self,
+        src: CapPtr,
+        rights: Rights,
+        value: u32,
+        mask: u32,
+    ) -> Result<CapPtr, CapError> {
+        let rule = ipc_chan::Rule { value, mask };
+        if !rule.is_wellformed() {
+            return Err(CapError::Invalid);
+        }
+        let s = self.resolve(src)?;
+        if !matches!(self.objects[self.slots[s].object].kind, ObjectKind::Endpoint(_)) {
+            return Err(CapError::Invalid);
+        }
+        if self.slots[s].chan.is_some() {
+            return Err(CapError::Invalid);
+        }
+        if self.slots[s].perms.is_some()
+            && self.slots[s].perms.unwrap_or(ipc_perm::ALL) & ipc_perm::DUP == 0
+        {
+            return Err(CapError::Invalid);
+        }
+        let dst = self.copy(src, rights)?;
+        self.slots[dst.slot].chan = Some(rule);
         Ok(dst)
     }
 
@@ -1082,6 +1161,10 @@ impl CapSpace {
     /// 9 = IPC-Berechtigungen **vergrößert**: ein Kind trägt Bits, die sein Elter nicht trägt
     ///     (ein ungetaggter Elter zählt als alle Bits). Die Berechtigungsmaske darf entlang des
     ///     CDT nur schrumpfen.
+    /// 10 = Kanalregel **missgebildet**: ein belegter Slot trägt `(value, mask)` mit
+    ///     `mask == 0` oder Wertbits ausserhalb der Maske. Regeln entstehen nur wohlgeformt
+    ///     ([`derive_channel`](Self::derive_channel)) und wandern nur unverändert
+    ///     (`copy` übernimmt) — Missbildung heisst Speicherfehler, nicht Ableitung.
     ///
     /// `refs` ist die Zählfläche für die Refcount-Prüfung und muss mindestens
     /// [`finalize_capacity`](Self::finalize_capacity) Einträge fassen; ihr Inhalt beim Eintritt
@@ -1165,6 +1248,11 @@ impl CapSpace {
                 if child_perms & !parent_perms != 0 {
                     return 9;
                 }
+            }
+            // (10) Channel rules are well-formed wherever they stand (see
+            // `chan_audit_clean` — same predicate the host unit test drives both ways).
+            if !chan_audit_clean(&self.slots.as_slice()) {
+                return 10;
             }
             if let Some(c) = m.first_child {
                 // first_child muss belegt sein, `parent == s` haben UND der **Listenkopf** sein
@@ -1317,6 +1405,7 @@ impl CapSpace {
             badge,
             subregion: None,
             perms: None,
+            chan: None,
             mdb: Mdb::EMPTY,
         };
         // Höchststand hier, im einzigen Belegungspfad: eine Stichprobe von aussen wuerde genau
@@ -1635,5 +1724,31 @@ mod tests {
         assert_eq!(slots[1].mdb.prev_sibling, Some(2));
         assert_eq!(slots[2].mdb.parent, Some(0));
         assert_eq!(count_children(&slots, 0, 8), Ok(2));
+    }
+
+    /// **Code 10 faehrt beide Ausgaenge.** Wohlgeformte Regeln (auch mehrere) bestehen;
+    /// eine einzige missgebildete — hier von Hand hingelegt, weil die API keine erzeugen
+    /// kann — faellt durch. Unbelegte Slots zaehlen nie, mit oder ohne Regel.
+    #[test]
+    fn kanal_audit_unterscheidet_wohlgeformt_von_missgebildet() {
+        use caprock_abi::ipc_chan::Rule;
+        let mut slots = [CapSlot::EMPTY; 3];
+        assert!(chan_audit_clean(&slots), "leere Tabelle ist sauber");
+        slots[0].used = true;
+        slots[0].chan = Some(Rule { value: 7, mask: 0xFFFF_FFFF });
+        slots[1].used = true;
+        slots[1].chan = Some(Rule { value: 0x1200, mask: 0xFF00 });
+        assert!(chan_audit_clean(&slots), "zwei saubere Regeln bestehen");
+        // Missbildung auf belegtem Slot: Maske null.
+        slots[2].used = true;
+        slots[2].chan = Some(Rule { value: 0, mask: 0 });
+        assert!(!chan_audit_clean(&slots), "Gegenprobe: missgebildete Regel faellt");
+        // Derselbe Eintrag unbelegt: unsichtbar, wie freier Speicher.
+        slots[2].used = false;
+        assert!(chan_audit_clean(&slots), "unbelegte Slots zaehlen nie");
+        // Wertbits ausserhalb der Maske: ebenfalls missgebildet.
+        slots[2].used = true;
+        slots[2].chan = Some(Rule { value: 0x1_0000, mask: 0xFFFF });
+        assert!(!chan_audit_clean(&slots), "Gegenprobe: Wert ausserhalb Maske faellt");
     }
 }
