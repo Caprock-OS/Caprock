@@ -9828,6 +9828,78 @@ fn msi_block_freigeben(basis: u8, n: usize) {
     }
 }
 
+// --- Stufe B auf aarch64: SPI-Pool an der GICv2m-Doorbell (kein IRTE) ----------------------
+//
+// Dasselbe Zweipass-Muster wie der x86-Vektorblock (erst schauen, dann nehmen), nur dass die
+// Ressource hier kein CPU-Vektor, sondern eine SPI-Nummer an der GICv2m-Doorbell ist
+// (`MSI_SPI_BASIS..`, Grösse aus der HAL — ein Ort, keine zweite Zahl). Die GICv2m prüft die
+// Quelle NICHT (anders als x86-SVT/SID): der Riegel ist die kernel-geschriebene Zeile plus
+// cap-gegatetem Bind — s. `msi_grant`. Vollständige Quellenprüfung braucht GICv3/ITS.
+#[cfg(target_arch = "aarch64")]
+const _: () = assert!(
+    hal::pcie::MSI_SPI_POOL == MAX_DRIVER_ASSIGN * VEKTOREN_JE_ZUTEILUNG
+        && (hal::pcie::MSI_SPI_BASIS as usize) + hal::pcie::MSI_SPI_POOL <= 256,
+    "ARM-SPI-Pool passt nicht zur Zuteilungsbreite (oder nicht in MsiMehrGrant.basis: u8)"
+);
+
+/// Belegte SPIs des ARM-Pools (Index = SPI - MSI_SPI_BASIS).
+#[cfg(target_arch = "aarch64")]
+static MSI_SPI_BELEGT: [AtomicBool; hal::pcie::MSI_SPI_POOL] =
+    [const { AtomicBool::new(false) }; hal::pcie::MSI_SPI_POOL];
+
+/// Einen **zusammenhängenden** SPI-Block der Länge `n` reservieren (GICv2m-Gegenstück zu
+/// `msi_block_reservieren`). `None` = kein zusammenhängender Block frei — gerätelokal (E12).
+#[cfg(target_arch = "aarch64")]
+fn msi_spi_reservieren(n: usize) -> Option<u32> {
+    if n == 0 || n > hal::pcie::MSI_SPI_POOL {
+        return None;
+    }
+    let mut start = 0usize;
+    while start + n <= hal::pcie::MSI_SPI_POOL {
+        let mut frei = true;
+        for i in 0..n {
+            if MSI_SPI_BELEGT[start + i].load(Ordering::Acquire) {
+                frei = false;
+                break;
+            }
+        }
+        if frei {
+            let mut genommen = 0usize;
+            for i in 0..n {
+                if MSI_SPI_BELEGT[start + i]
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    genommen += 1;
+                } else {
+                    break;
+                }
+            }
+            if genommen == n {
+                return Some(hal::pcie::MSI_SPI_BASIS + start as u32);
+            }
+            for i in 0..genommen {
+                MSI_SPI_BELEGT[start + i].store(false, Ordering::Release);
+            }
+            start += 1;
+        } else {
+            start += 1;
+        }
+    }
+    None
+}
+
+/// Einen SPI-Block zurückgeben (Rücknahme einer halben Zuteilung, Teardown).
+#[cfg(target_arch = "aarch64")]
+fn msi_spi_freigeben(basis: u8, n: usize) {
+    let start = (basis as u32).wrapping_sub(hal::pcie::MSI_SPI_BASIS) as usize;
+    for i in 0..n {
+        if start + i < hal::pcie::MSI_SPI_POOL {
+            MSI_SPI_BELEGT[start + i].store(false, Ordering::Release);
+        }
+    }
+}
+
 /// **What a granted multi-vector device interrupt consists of.**
 ///
 /// Four pieces and not three: `ticket` is the `#[must_use]` receipt `irte_vergib` hands out for
@@ -9880,9 +9952,28 @@ fn msi_revoke(dev: &DriverDevice, g: &MsiMehrGrant) {
     msi_block_freigeben(g.basis, g.anzahl);
 }
 
-/// aarch64 has no MSI grant to take back — see [`msi_grant`].
-#[cfg(not(target_arch = "x86_64"))]
-fn msi_revoke(_dev: &DriverDevice, _g: &MsiMehrGrant) {}
+/// **Take an ARM multi-SPI grant back — device first, rows second, SPIs last.**
+///
+/// Same order as the x86 path (source before translation before numbers), minus the
+/// translation step ARM does not have: quiesce the device (Function Mask), mask every
+/// written row, then free the SPI block. No IRTE handle exists (`handle` is always 0).
+#[cfg(target_arch = "aarch64")]
+fn msi_revoke(dev: &DriverDevice, g: &MsiMehrGrant) {
+    // 1. Still the device first.
+    let _ = hal::pcie::msix_quiesce_by_rid(dev.rid, dev.msix_cap);
+    if dev.msix_table != 0 {
+        // SAFETY: `msix_table` is this device's identity-mapped table base, each row
+        // `i < anzahl` below the offered row count (the grant capped `anzahl` at it),
+        // and the device belongs to nobody else until released.
+        for i in 0..g.anzahl {
+            unsafe { hal::pcie::msix_mask_entry(dev.msix_table, i as u16) };
+        }
+    }
+    // 2. No translation step on ARM (GICv2m has no source check — named caveat, not
+    // a skipped step: there is nothing to withdraw).
+    // 3. And only then the SPIs, which is what a later grant would hand out again.
+    msi_spi_freigeben(g.basis, g.anzahl);
+}
 
 /// **Allocate an IRTE block, write the device's MSI-X rows, arm them** (Stufe B, B1).
 ///
@@ -9964,21 +10055,52 @@ fn msi_grant(dev: &DriverDevice, wunsch: usize) -> Option<MsiMehrGrant> {
     Some(g)
 }
 
-/// **aarch64 grants no vector — and says so rather than pretending.**
+/// **Allocate a contiguous SPI block, write the device's MSI-X rows, arm them**
+/// (aarch64 counterpart of the x86 `msi_grant`: GICv2m doorbell instead of IRTE).
 ///
-/// GICv3/ITS is a different mechanism and is an explicit non-goal of Stufe B (plan §5); the
-/// existing `irq` line already covers the aarch64 delivery path with a real device (RTC). So the
-/// honest answer here is „no vector", which is exactly the state this architecture is in today:
-/// the driver polls.
+/// Same Voll-Absage rule (all of `anzahl` or nothing — a half-armed device binds vectors
+/// whose rows were never written), same caps (`VEKTOREN_JE_ZUTEILUNG`, offered rows).
+/// Each row carries the doorbell address + its SPI as data; rows are written masked-first
+/// semantics per-row (address+data, then unmask via enable), mirroring the x86 order.
+/// Enable is read back: a config space that does not answer returns `0xffff`, and a write
+/// nobody reads back looks the same in both cases — failure revokes everything taken.
 ///
-/// **Not `unimplemented!()`** — this path is walked on every device assignment, and it is not a
-/// gap in the code, it is the scope of the stage. The seam sits here and not at the four call
-/// sites inside `assign_driver_device`, because those four called `hal::vtd` directly and broke
-/// the aarch64 build (E0433 × 4, E0425 × 4) — third instance of *arch-neutral kernel code calls a
-/// HAL function that only x86 has*.
-#[cfg(not(target_arch = "x86_64"))]
-fn msi_grant(_dev: &DriverDevice, _wunsch: usize) -> Option<MsiMehrGrant> {
-    None
+/// **Named caveat (not a skipped check):** the GICv2m performs no source check (unlike
+/// x86 SVT/SID) — a forged doorbell write from another device is fabric-possible. The
+/// latch is kernel-written rows + cap-gated bind. Full source checking needs GICv3/ITS.
+#[cfg(target_arch = "aarch64")]
+fn msi_grant(dev: &DriverDevice, wunsch: usize) -> Option<MsiMehrGrant> {
+    if dev.msix_table == 0 || dev.msix_eintraege == 0 {
+        return None;
+    }
+    let anzahl = wunsch.min(dev.msix_eintraege as usize);
+    if anzahl == 0 || anzahl > VEKTOREN_JE_ZUTEILUNG {
+        return None;
+    }
+    let basis = msi_spi_reservieren(anzahl)?;
+    let g = MsiMehrGrant { basis: basis as u8, anzahl, handle: 0 };
+    // **Je Zeile ihre eigene SPI** — Zeile `i` trägt `basis + i` als Datenwort an der
+    // Doorbell; erst Adresse+Daten, dann Freischalten, sonst ginge ein Interrupt in der
+    // Lücke an SPI 0.
+    let door = hal::pcie::msi_doorbell_addr();
+    for i in 0..anzahl {
+        let spi = basis + i as u32;
+        // SAFETY: see `msi_revoke` (own table, row < offered rows, exclusive device).
+        unsafe {
+            hal::pcie::msix_write_entry(
+                dev.msix_table,
+                i as u16,
+                door as u32,
+                hal::pcie::msi_data_for_spi(spi),
+            )
+        };
+    }
+    let ctrl = hal::pcie::msix_enable_by_rid(dev.rid, dev.msix_cap);
+    if hal::pcie::all_ones16(ctrl) || ctrl & hal::pcie::MSIX_CTRL_ENABLE == 0 {
+        msi_revoke(dev, &g);
+        return None;
+    }
+    Some(g)
 }
 
 /// Was einer Treiber-PD tatsächlich zugeteilt wurde — gebraucht, um die **Gerätesicht** ihrer

@@ -313,6 +313,14 @@ pub extern "C" fn kernel_main(dtb_addr: u64) -> ! {
         println!("sched   : Round-Robin + cap-gesicherte IPC (2 PDs + 3 Worker + Idle)");
     }
 
+    // --- ARM-Geräteangebot (Strang 2, P0) ---
+    // virtio-Geräte als Treiber-PD-Angebot — das ARM-Gegenstück zum x86-Bring-up
+    // (`offer_driver_device`). Nur ARM, nur Angebot (kein Treiberstart): welches Gerät
+    // die Boot-Platte ist, entscheidet später der Handover-Selektor (Strang 5), nicht
+    // die Fundreihenfolge — bis dahin lässt der Vorgabe-Selektor nur virtio-blk zu.
+    #[cfg(target_arch = "aarch64")]
+    crate::arch::aarch64::devassign::offer_arm_devices();
+
     // --- Root-Task (A-2.1/A-2.2) ---
     //
     // Dieselbe Stelle wie auf x86 (`arch::x86_64::bringup`) und aus demselben Grund **ausserhalb**

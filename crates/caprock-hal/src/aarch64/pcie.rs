@@ -375,3 +375,90 @@ pub fn arm_bus_master(rid: u32) {
     let cmd = cfg_read16(bus, dev, func, CFG_COMMAND);
     write_cmd(bus, dev, func, cmd | CMD_BUS_MASTER);
 }
+
+// --- MSI-X (ARM parity strand) ---------------------------------------------------------------
+//
+// aarch64 counterpart of the x86 MSI-X section in `x86_64/pcie.rs`. The capability walk, the
+// row format and the enable/quiesce discipline live in [`super::msi`] (self-contained and
+// host-tested); here only the thin `PciDevice`/RID binding, mirroring the x86 function names
+// so the grant path reads identically on both arches.
+//
+// Delivery on this board is GICv2m: rows carry the doorbell address with the SPI number as
+// data (s. `msi`), not an IRTE handle. There is no remapping stage — the latch is the
+// kernel-written row (E-B2 rule), and a device whose table lies inside the offered BAR is
+// refused at offer time ([`msix_in_bar`]).
+pub use super::msi::{
+    msi_data_for_spi, msi_doorbell_addr, msix_in_bar, msix_mask_entry, msix_read_entry,
+    msix_write_entry, spi_in_range, MsixInfo, MSI_SPI_BASIS, MSI_SPI_POOL, MSIX_CTRL_ENABLE,
+    MSIX_CTRL_FUNC_MASK,
+};
+
+/// **Find the MSI-X capability of a device.** `None` = it carries none.
+pub fn msix_find(d: &PciDevice) -> Option<MsixInfo> {
+    let (bus, dev, func) = (d.bus, d.dev, d.func);
+    super::msi::msix_find_with(
+        &|off| cfg_read8(bus, dev, func, off),
+        &|off| cfg_read16(bus, dev, func, off),
+        &|off| cfg_read32(bus, dev, func, off),
+    )
+}
+
+/// `0xffff` means "no device answers here" (walk guard, s. `msi`).
+pub fn all_ones16(v: u16) -> bool {
+    super::msi::all_ones16(v)
+}
+
+/// Write `MSI-X Control` and **read it back**.
+///
+/// The read-back is a spoken-for check, not a convenience: a configuration space that does
+/// not answer returns `0xffff`, and a write nobody reads back looks identical whether it
+/// landed or vanished. Same shape as the x86 helper, including the 32-bit word RMW (the
+/// control register sits in the upper half).
+fn msix_ctrl_store(bus: u8, dev: u8, func: u8, cap: u16, neu: u16) -> u16 {
+    let wort = cfg_read32(bus, dev, func, cap);
+    cfg_write32(bus, dev, func, cap, (wort & 0x0000_ffff) | ((neu as u32) << 16));
+    cfg_read16(bus, dev, func, cap + 2)
+}
+
+/// **Arm MSI-X at the device** (`Enable` on, Function Mask off). Returns the read-back
+/// control word — see [`msix_ctrl_store`] for why it is returned, not discarded.
+pub fn msix_enable(d: &PciDevice, info: &MsixInfo) -> u16 {
+    let ctrl = cfg_read16(d.bus, d.dev, d.func, info.cap + 2);
+    msix_ctrl_store(d.bus, d.dev, d.func, info.cap, super::msi::msix_enable_ctrl(ctrl))
+}
+
+/// Like [`msix_enable`], but addressed by **RID** instead of a `PciDevice`.
+///
+/// The device assignment carries only the RID (the identity under which the device requests
+/// DMA) — dragging a `PciDevice` there would mean storing a snapshot of the configuration
+/// space and using it later.
+pub fn msix_enable_by_rid(rid: u32, cap: u16) -> u16 {
+    let (bus, dev, func) = rid_parts(rid);
+    let ctrl = cfg_read16(bus, dev, func, cap + 2);
+    msix_ctrl_store(bus, dev, func, cap, super::msi::msix_enable_ctrl(ctrl))
+}
+
+/// **Read the control register without writing** — for the checker.
+///
+/// Bit 15 is `Enable`, **bit 14 the function mask**: it suppresses every vector of the
+/// function regardless of per-row `Vector Control`. The enable read-back checks bit 15 only —
+/// bit 14 was thus an unchecked cleared promise without this.
+pub fn msix_ctrl_lesen(rid: u32, cap: u16) -> u16 {
+    let (bus, dev, func) = rid_parts(rid);
+    cfg_read16(bus, dev, func, cap + 2)
+}
+
+/// **Still the device's MSI-X** — the first step of taking an interrupt grant back.
+///
+/// Function Mask, **not** `Enable = 0`, and that is the whole point of the function existing
+/// separately: a function whose MSI-X Enable is clear falls back to **INTx** (PCI 3.0 §6.8.2),
+/// and nothing in this kernel routes INTx. The Function Mask forbids every vector and leaves
+/// that fallback shut.
+///
+/// Returns the read-back control word like [`msix_enable`]; a teardown has nothing left to
+/// decide with it, and a caller that wants to check may.
+pub fn msix_quiesce_by_rid(rid: u32, cap: u16) -> u16 {
+    let (bus, dev, func) = rid_parts(rid);
+    let ctrl = cfg_read16(bus, dev, func, cap + 2);
+    msix_ctrl_store(bus, dev, func, cap, super::msi::msix_quiesce_ctrl(ctrl))
+}

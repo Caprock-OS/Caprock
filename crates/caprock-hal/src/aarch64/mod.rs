@@ -14,6 +14,8 @@ pub mod fp;
 pub mod gic;
 pub mod iommu;
 pub mod mmu;
+/// MSI-X table programming + GICv2m doorbell (ARM parity strand, MSI half).
+pub mod msi;
 pub mod pcie;
 pub mod psci;
 pub mod smmu;
