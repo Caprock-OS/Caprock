@@ -5145,12 +5145,13 @@ pub fn demo_report_then_idle() -> ! {
 ///
 /// 2026-08-17: 59 -> 60 durch `numa` (Z8 N1).
 /// 2026-08-17: 58 -> 59 durch `smt` (Z6 Stufe 1).
+/// 2026-10-09: 61 -> 62 durch `irt-ho` (Strand 5: IRT attests its firmware tables).
 /// 2026-08-17: 57 -> 58 durch `iohealth`, die arch-neutrale IOMMU-Gesundheit. Dass diese Zahl von
 /// Hand gefuehrt wird, ist genau die Form, die `system::MELDESTELLEN` am 2026-08-11 losgeworden
 /// ist (abgeleitet statt gezaehlt) -- hier faengt der Typ es wenigstens beim Bau ab, weil die
 /// Liste ein Array fester Laenge ist. **Der Bau hat es auch getan**, und zwar nur unter
 /// `--features selftest`: ein Bau ohne das Merkmal enthaelt diese Datei gar nicht.
-const DONE_FLAGS_ARM: usize = 61;
+const DONE_FLAGS_ARM: usize = 62;
 
 fn all_done(warum: Option<&mut [(&'static str, bool); DONE_FLAGS_ARM]>) -> bool {
     let workers = (0..NWORKERS).all(|i| WORKER_COUNTS[i].load(Ordering::Relaxed) >= THRESHOLD);
@@ -5376,6 +5377,11 @@ fn all_done(warum: Option<&mut [(&'static str, bool); DONE_FLAGS_ARM]>) -> bool 
         // der Suite. Die Sonde steht dort unten, weil sie Speicher belegt und ein Test, der
         // Speicher belegt, baseline-empfindliche Tests kippt.
         ("arena", !crate::spawnarena::urteil().gattert()),
+        // Strand 5: the IRT attested its firmware tables (DTB nodes/versions,
+        // ACPI checksums, driver modules, boot-disk rule). Gates from the
+        // first day: a missing IRT report must fail loudly (`offen: irt-ho`),
+        // never sit unread beside a green suite.
+        ("irt-ho", crate::handover::irt_ho_done()),
     ];
     if let Some(w) = warum {
         *w = flags;
@@ -5434,6 +5440,11 @@ fn pdbind_bericht() {
 
 fn report() {
     pdbind_bericht();
+
+    // Strand 5: the IRT's firmware-table attestation (a report, not silent
+    // use). Runs here because the IRT finishes long before the suite does;
+    // the verdict gates in `all_done` (`irt-ho`), this block prints it.
+    crate::handover::irt_report();
 
     // **Z6b: die Speicher-Sonde, auf DIESEM Zweig gefahren.**
     //

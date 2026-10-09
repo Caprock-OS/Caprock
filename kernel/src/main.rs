@@ -82,6 +82,11 @@ mod grossdma;
 /// C4: die **Stack-Wasserstandsmarke** — reichen 16 KiB, oder sind sie nur gross? Arch-neutral;
 /// die Zaehler laufen auf beiden Architekturen mit, die Berichtszeile steht heute nur auf x86.
 mod kstackmark;
+/// Firmware description to the IRT (strand 5): kernel side is PASS-THROUGH
+/// only (bounds validation + mapping, no table interpretation). aarch64-only;
+// x86 is wired by the UEFI-stub strand.
+#[cfg(target_arch = "aarch64")]
+mod handover;
 /// Kernel-Glue des generischen Binary-Loaders. **Seit A-1 auf beiden Architekturen** — die
 /// Archiv-Quelle ist nicht mehr ein fest verdrahtetes ARM-Fenster, sondern eine zur Laufzeit
 /// gemeldete Spanne (auf x86 ein Multiboot-Modul).
@@ -206,6 +211,9 @@ pub extern "C" fn kernel_main(dtb_addr: u64) -> ! {
 
     // MMU + Caches zuerst: danach sind Atomics/der Konsolen-Lock wohldefiniert.
     hal::mmu::init_primary();
+
+    // Strand 5: firmware DTB address from `x0` (bounds-checked, never parsed).
+    crate::handover::note_boot_dtb(dtb_addr);
 
     // F3 (Hygiene): Bring-up-Meldung, kein Testbericht -- nur im Pruefbau sichtbar, sonst
     // still. Es gibt kein eigenes `boot-verbose`-Feature (kernel/Cargo.toml ist fremder Besitz),
@@ -332,6 +340,9 @@ pub extern "C" fn kernel_main(dtb_addr: u64) -> ! {
         println!("verif   : FAILURES (Verifiziererthread liess sich nicht starten -- SYS_LOAD ist damit tot)");
     }
     let _root_ok = loader::start_root_task_reported();
+    // Strand 5: what the pass-through staged and mapped (bounds-checked,
+    // never parsed). AFTER the root load: staging and mapping happen there.
+    crate::handover::boot_report();
 
     // Sekundärkerne via PSCI starten.
     println!("smp     : starte Kerne 1..{} via PSCI CPU_ON (hvc) ...", cores - 1);

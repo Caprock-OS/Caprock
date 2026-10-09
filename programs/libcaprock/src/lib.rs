@@ -775,6 +775,71 @@ macro_rules! entry {
     };
 }
 
+// --- Firmware handover to the IRT (strand 5) -------------------------------------------------
+//
+// The kernel maps the handover descriptor + DTB copy at FIXED virtual addresses
+// (see `kernel::handover`; DIVERGENCE: the real `caprock-handover` will pass
+// addresses dynamically). A `forbid(unsafe_code)` IRT cannot dereference a
+// fixed address itself, so the audited SDK encapsulates the read -- the same
+// pattern as [`Window`]: every access is bounds-checked, and only bytes the
+// kernel just mapped are reachable. The caller still treats the bytes as
+// untrusted foreign data (magic/version/length first, parse second).
+
+/// Handover view. aarch64-only: the x86 path is wired by the UEFI-stub strand.
+#[cfg(target_arch = "aarch64")]
+pub mod handover {
+    /// Virtual address of the descriptor page (mirror of `kernel::handover`).
+    pub const DESC_VA: u64 = 0x43E0_0000;
+    /// Descriptor length in bytes (mirror of `kernel::handover`).
+    pub const DESC_LEN: usize = 152;
+    /// Descriptor magic (mirror of `kernel::handover`).
+    pub const MAGIC: u64 = 0x3230_304F_4850_4143;
+    /// Virtual address of the DTB copy (mirror of `kernel::handover`).
+    pub const DTB_VA: u64 = 0x43C0_0000;
+    /// Largest DTB window accepted here (mirror of `kernel::handover`).
+    pub const MAX_DTB: u64 = 0x100_000;
+
+    /// The descriptor page as bytes. `None` when it carries no valid header
+    /// (magic/version/length) -- an absent or corrupt handover is an absent
+    /// handover, never a fault, in every boot where the kernel staged (which
+    /// is every boot: the descriptor page is static, and staging fails only
+    /// together with the boot itself). If the mapping itself failed (page-table
+    /// OOM, counted and reported by the kernel), this read can fault -- there
+    /// is no fault recovery in EL0, so absolute freedom does not exist.
+    pub fn desc_bytes() -> Option<&'static [u8]> {
+        // SAFETY: the kernel maps exactly one read-only page at DESC_VA into
+        // this PD before the IRT starts (or nothing at all, and the header
+        // check below refuses the read). Only read, header-checked first.
+        let b = unsafe { core::slice::from_raw_parts(DESC_VA as *const u8, DESC_LEN) };
+        if b.len() < 16 {
+            return None;
+        }
+        let magic = u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+        let ver = u32::from_le_bytes([b[8], b[9], b[10], b[11]]);
+        let len = u32::from_le_bytes([b[12], b[13], b[14], b[15]]);
+        if magic != MAGIC || ver != 2 || len as usize != DESC_LEN {
+            return None;
+        }
+        Some(b)
+    }
+
+    /// `len` bytes of the DTB copy at `va`. Bounds-checked against the agreed
+    /// window (`DTB_VA`, `MAX_DTB`): a descriptor pointing elsewhere is
+    /// refused rather than followed.
+    pub fn dtb_bytes(va: u64, len: u64) -> Option<&'static [u8]> {
+        if len == 0 || len > MAX_DTB {
+            return None;
+        }
+        let end = va.checked_add(len)?;
+        if va < DTB_VA || end > DTB_VA + MAX_DTB {
+            return None;
+        }
+        // SAFETY: inside the agreed window, mapped read-only by the kernel;
+        // length pre-checked. Only read.
+        Some(unsafe { core::slice::from_raw_parts(va as *const u8, len as usize) })
+    }
+}
+
 // Nur auf freistehenden Zielen (PD-Bau, `programs/*-caprock-user.json` ohne `os`-Feld —
 // Default `none`): Dort gibt es kein `std` und damit keinen Panik-Handler. Auf dem Host
 // (Host-Tests, `target_os = linux`) linkt der Testharness `std` mit eigenem Handler — ein

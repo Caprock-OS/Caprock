@@ -1434,13 +1434,29 @@ pub fn start_root_task() -> Result<(ThreadId, usize), RootTaskError> {
             return Err(RootTaskError::StartSetNotPrefix);
         }
     }
+    // Strand 5 (DTB-or-ACPI to the IRT): stage the firmware description
+    // BEFORE the load (it owns frames, needs no PD) and map it into the root
+    // task after. Fail-open by design: a handover outage must never brick the
+    // boot; the IRT reports absent and the kernel counts the failure.
+    #[cfg(target_arch = "aarch64")]
+    let ho_staged = crate::handover::stage_for_root();
     let caps = endow_from_manifest(&entry, None, 0, None)?; // Startmenge: Vorgabe-Pool
     let arg = boot_arg(index, n);
     // Die belegten Einträge zu einem dichten Slice verdichten. `CapPtr` hat bewusst keinen
     // öffentlichen Konstruktor (ein fabrizierbarer Cap-Handle wäre eine Einladung), also dient
     // der erste erzeugte Cap als Füllwert — ohne Cap gibt es nichts zu verdichten.
     let Some(first) = caps.iter().flatten().next().copied() else {
-        return load_image(&prog, &[], arg).map_err(RootTaskError::Rejected);
+        // Cap-less root entry: same handover mapping, no endowment to compact.
+        return match load_image(&prog, &[], arg) {
+            Ok(r) => {
+                #[cfg(target_arch = "aarch64")]
+                if ho_staged {
+                    crate::handover::hand_to_root(r.0);
+                }
+                Ok(r)
+            }
+            Err(e) => Err(RootTaskError::Rejected(e)),
+        };
     };
     let mut endow = [first; ENDOW_SLOTS];
     let mut n = 0usize;
@@ -1449,7 +1465,13 @@ pub fn start_root_task() -> Result<(ThreadId, usize), RootTaskError> {
         n += 1;
     }
     match load_image(&prog, &endow[..n], arg) {
-        Ok(r) => Ok(r),
+        Ok(r) => {
+            #[cfg(target_arch = "aarch64")]
+            if ho_staged {
+                crate::handover::hand_to_root(r.0);
+            }
+            Ok(r)
+        }
         Err(e) => {
             // Die erzeugten Endowment-Caps sind noch nirgends installiert -> sonst lecken sie.
             for &(_, cap) in &endow[..n] {

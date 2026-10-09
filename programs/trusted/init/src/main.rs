@@ -125,10 +125,22 @@ const NTFN_IRQ_SLOT: u64 = 8;
 /// Der Slot, den dieser Negativfall als `Irq`-Cap ANBIETET — und der **leer** ist. Das ist die
 /// gepruefte Sache: nicht „eine falsche Cap", sondern **keine**.
 const KEINE_IRQ_CAP_SLOT: u64 = 9;
+/// Own badged copy for the strand-5 handover report (s. [`handover_stub`]).
+/// Slot 10: 0/1 loader/ntfn, 3/4 CCOPY probes, 5 child delegation, 6 pool
+/// probe, 8 irq probe, 9 empty irq offer -- 2 and 7 stay free, 10 is next.
+/// aarch64-only (the report step is, too).
+#[cfg(target_arch = "aarch64")]
+const NTFN_HO_SLOT: u64 = 10;
 /// Rechte-Bitmaske fuer die Kopien (R+W+X; wird ohnehin mit den Rechten des Originals geschnitten).
 const RWX: u64 = 7;
 
 libcaprock::entry!(run);
+
+/// Strand 5: firmware-handover report (receive/parse/attest). Local stub
+/// module until strand 4 lands; see its header for the divergence list.
+/// aarch64-only: the x86 path is wired by the UEFI-stub strand.
+#[cfg(target_arch = "aarch64")]
+mod handover_stub;
 
 fn run(arg: usize) -> ! {
     let index = (arg & 0xffff_ffff) as u64;
@@ -245,6 +257,21 @@ fn run(arg: usize) -> ! {
         && libcaprock::load(LOADER_SLOT, 0, &[], 0, 0) != libcaprock::result::OK
     {
         libcaprock::signal(NTFN_GONE_SLOT, 0);
+    }
+
+    // 4d. Strand 5: firmware-handover report (receive/parse/attest, never
+    //    silent). Runs on kernel-mapped pages, needs no caps, and never blocks
+    //    the duties above: a missing handover yields word 0 (no attestation
+    //    bit), which the kernel reports as absent -- loudly, never silently.
+    //    aarch64-only (the x86 path is wired by the UEFI-stub strand).
+    #[cfg(target_arch = "aarch64")]
+    {
+        let word = handover_stub::run();
+        if libcaprock::ccopy(NTFN_SLOT, NTFN_HO_SLOT, RWX, word)
+            == libcaprock::result::OK
+        {
+            libcaprock::signal(NTFN_HO_SLOT, 0);
+        }
     }
 
     // 5. Fertig.

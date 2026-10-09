@@ -5499,6 +5499,44 @@ pub fn map_into_thread(tid: ThreadId, base: u64, len: u64, perm_code: u8) -> boo
     )
 }
 
+/// Firmware-handover mapping for strand 5 (DTB-or-ACPI to the IRT).
+///
+/// Maps `[phys, phys+len)` at the FIXED virtual address `va` (read-only,
+/// EL0-visible) into the address space of thread `tid`. Unlike
+/// [`map_into_thread`] (identity VA == PA), the handover agrees on fixed VAs
+/// with the IRT (`kernel::handover`), so the mapping is VA != PA via
+/// `vspace_map_page_at` -- the same primitive the binary loader uses for
+/// link addresses. Page tables come from `MEM` like everywhere else.
+///
+/// Fail-closed (`false`) on any rejected page; partial mappings are possible
+/// on failure and the caller must treat `false` as "not handed over".
+/// `va` and `len` must be page-aligned; `phys` page-aligned.
+pub fn map_handover_into_thread(tid: ThreadId, va: u64, phys: u64, len: u64) -> bool {
+    if va % 4096 != 0 || len == 0 || len % 4096 != 0 || phys % 4096 != 0 {
+        return false;
+    }
+    let asid = (vspace_of(tid.slot()) >> 48) as u16;
+    let Some(l2) = vspace_l2(asid) else {
+        return false;
+    };
+    let mut off = 0u64;
+    while off < len {
+        let mut alloc = || pt_rahmen(mem_alloc_anywhere(4096, 4096));
+        if !hal::mmu::vspace_map_page_at(
+            l2,
+            va + off,
+            phys + off,
+            hal::mmu::UserPerm::Ro,
+            &mut alloc,
+        ) {
+            return false;
+        }
+        off += 4096;
+    }
+    hal::mmu::flush_asid(asid);
+    true
+}
+
 /// Kernel-Setup-Gegenstück zu [`map_into_thread`]: `[base, base+len)` aus der VSpace
 /// des Threads `tid` wieder entfernen (Seiten auf EL1-only, TLB-Flush). Für den
 /// Fuzzer/Tests, um den per-Seite-Unmap-Pfad explizit zu fahren. No-Op (false) für
