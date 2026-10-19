@@ -96,6 +96,17 @@ schrumpft. Details in [AGENTS.md](AGENTS.md), Mitteilung 1.
 
 ## Strang A — Ausführen und Austauschen (Claude A)
 
+**Nachtrag 2026-10-09 (opencode, Branch `ipc-cap`): IPC-Kanalregel + PDCTL-Erzeugung.**
+`CHAN = 38` (Kanalregel pro Endpoint-Cap, Sendzeit-Prüfung in `CALL`), PDCTL
+`CREATE/MAP_INTO/SPAWN_INTO` (Prozessdienst-Primitiven im Kern). Belege: Host-Tests
+`cap`/`cspace` grün, Kernel baut x86+aarch64, Verus-Modell `verus/cap_ipc_rights.rs`
+8/8, QEMU-Hauptsuite x86 ALL PASS (KVM) + ARM-Suite ALL PASS (81×). Lade-Suite-Erstlauf:
+4 FAILs (A-1.2, N4, A-5.3×2) — A-5.3 auch auf Baseline ohne meine Commits (fremd/bestehend);
+N4-Mechanismus danach von Hand auf HEAD bewiesen (Manifest angenommen, Absage da) —
+Neulauf der Lade-Suite seriell (`build/diag/ipc-cap-load2.log`): N4 + A-1.2 PASS —
+der Erstlauf lag am gemischten Build-Artefakt, kein Code-Regress. Übrig: A-5.3×2 wie auf
+Baseline ohne meine Commits (fremd/bestehend, s. AGENTS.md 21 Patch-Text-Angebot).
+
 **Zuletzt geändert (A): 2026-07-31 16:55 UTC**
 
 **Gerade in Arbeit: nichts Angefangenes — A-4 ist VOLLSTÄNDIG.** A-4.3 ist committet (`78f0d52`),

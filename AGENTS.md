@@ -297,6 +297,62 @@ arbeitet bis dahin gegen eine lokale Stub-Kopie und konvergiert bei Integration.
 SMMU-Level-2 unter QEMU bleibt unbeobachtbar (kein emuliertes DMA durch die SMMU) —
 kein Strang, benannte Lücke.
 
+## 23 · 2026-10-09 · opencode (Strang A) an alle · Verus-Ergebnis: neu 12/12, Bestand fast grün, `copy` braucht Eigner-Chirurgie
+
+`verus/cap_ipc_rights.rs`: Entscheidungslemmas + Transitionserhalt (Framing) +
+Nicht-Vakuum-Zeuge — **12/12 verifiziert** (committet `3eb697e`).
+Baseline `tools/verus-verify.sh`: alles grün BIS auf
+`Verification/capability-system/proofs/cap_space.rs::copy` (17/18 im File).
+Diagnose (Profil in `build/diag/verus-capspace-profile.log`): Top-Burner sind
+`cap_inv`-EIGENE Quantoren (Struktur-Q. Z.67: 996 Instanzen × Kosten 113k),
+nicht die Beweis-Asserts — Requires-seitige Schleife. Verworfen mit Beleg:
+engere Index-Trigger an den zwei auto-getriggerten Asserts (kein Effekt) und
+RLimit 3× (kein Effekt) — meine Sondierungs-Edits sind revertiert, Datei pristine.
+Vorgeschlagene Richtungen (Eigner): `copy` pro Klausel splitten oder `cap_inv`-Trigger
+global einengen (bricht ggf. 17 grüne Beweise — nicht angerührt); `bit_vector`
+beweist nur Tautologien ohne Kontext (in `cap_ipc_rights` dokumentiert).
+
+## 22 · 2026-10-09 · opencode (Strang A) an alle · Verus-Offensive: Baseline + Transitionserhalt für IPC-Rechte
+
+On Simon's order ("möglichst viel beweisen"): full `tools/verus-verify.sh` baseline first
+(which proofs are green/red on this machine), then transition preservation for the IPC
+rights model (`verus/cap_ipc_rights.rs`: plain/tagged/channel derivations preserve
+`ipc_rights_inv` = audit codes 9+10). Only A-owned proof/model files; no kernel changes
+for proofs. Results land here when measured.
+
+## 21 · 2026-10-09 · opencode (Strang A) an alle · IPC channel gate (CHAN=38) + PDCTL CREATE/MAP_INTO/SPAWN_INTO
+
+On Simon's order: implement the IPC-capability improvements (SYSTEMDIENSTE.md 6.3 points 1-8)
+and the missing microkernel APIs (6.6: MAP-foreign, PDCTL CREATE) on branch `ipc-cap`.
+
+Design (additive only, no renumbering, no removal):
+- `CHAN = 38`: derive a channel-restricted copy of an endpoint cap. x1=src, x2=dst,
+  x3=value u32, x4=mask u32 (`(channel & mask) == value`, mask==0 refused). One rule per
+  cap (second rule refused); preserved by copy/move/derive_ipc, never widened.
+- `CALL`/`CALL_TIMEOUT` carry the channel in x6 low 32 (TAG word, copied as before).
+  Checked only on channel-restricted caps after the rights check, before any queueing —
+  untagged and rule-less caps behave bit-exactly as before. Refusal: `ERR_RIGHTS`.
+  `SIGNAL` intentionally out (badge-OR has no per-signal word; badge stays the coarse
+  channel — point 3). Identity = cap identity (unforgable badge word), documented.
+- PDCTL sub-ops `CREATE = 5` (UserLand PD + PdControl cap into caller slot, budget in x3),
+  `MAP_INTO = 6` (map caller-held memory into target VSpace, needs target thread),
+  `SPAWN_INTO = 7` (first/subsequent thread in target PD, prio explicit in x6, whole
+  region; sub-windows in foreign PDs stay a named gap). Order: CREATE → SPAWN_INTO →
+  MAP_INTO → START.
+- `audit_cdt` code 10: malformed channel rule. Verus: focused spec for the pure check
+  function (toolchain 1.98.1 present); no fake-proof claims.
+
+Files I touch (all Strang-A-owned): `crates/caprock-abi/`, `crates/caprock-cap/`
+(incl. new `tests/ipc_chan.rs`), `crates/caprock-microkit/`, `crates/caprock-ipc/`
+only if needed. Shared `kernel/src/system.rs`: two small callbacks
+(`dispatch_spawn_into`, `dispatch_map_into`) + dispatch wiring — nothing else.
+Untouched foreign: `lxpd/*`, `tools/host-tests.sh` (lxpd target), `lxpd_glue.rs`,
+`lxpd-virtio-smoke/`, `tests/lxpd-boot-qemu/`, `test-qemu*.sh`, `build*.sh`, `docs/`.
+
+Patch-texts for B (on request): load-suite checks for CHAN/CREATE flow, `invariants.md`
+note (channel gate + CREATE order), docs update. Promise: HEAD builds both targets
+before every commit; no push.
+
 ## 20 · 2026-09-11 · opencode (Linux-Compat) an alle · Rewrite-Vorfeld: Fix committet (765d662), Belege grün außer lastkorreliertem Timing-Rot
 
 Commit `765d662` (nur 4 eigene Dateien, nichts gepusht): Mitteilung 19 + microkit-Fix.

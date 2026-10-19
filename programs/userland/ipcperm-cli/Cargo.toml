@@ -1,0 +1,13 @@
+# `ipcperm-cli` -- the client half of the tagged-IPC-capability end-to-end test.
+[package]
+name = "ipcperm-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ipcperm-cli"
+path = "src/main.rs"
+
+[dependencies]
+libcaprock = { path = "../../libcaprock" }

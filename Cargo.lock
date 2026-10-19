@@ -19,6 +19,7 @@ version = "0.0.1"
 name = "caprock-cap"
 version = "0.0.1"
 dependencies = [
+ "caprock-abi",
  "caprock-mem",
  "caprock-slab",
 ]
@@ -105,6 +106,10 @@ dependencies = [
  "caprock-slab",
  "caprock-sync",
 ]
+
+[[package]]
+name = "caprock-oom"
+version = "0.0.1"
 
 [[package]]
 name = "caprock-part"

@@ -1,6 +1,8 @@
 //! Capability-Space: Slot-Tabelle + Capability-Derivation-Tree (CDT).
 
 use crate::object::{DmaCoherence, DmaDir, Object, ObjectKind};
+use caprock_abi::ipc_chan;
+use caprock_abi::ipc_perm;
 use caprock_mem::{MemoryCap, PhysAllocator, PhysRegion, Rights};
 use caprock_slab::Slab;
 
@@ -86,6 +88,25 @@ pub struct CapSlot {
     /// lebenden Eltern-Region heraus. `copy`/`mint`/`move_cap` übernehmen das Fenster;
     /// `lookup`/`inspect`/`kind_of` melden die wirksame (verengte) Region.
     pub(crate) subregion: Option<PhysRegion>,
+    /// **IPC permission mask** (see `caprock_abi::ipc_perm`): `Some(mask)` marks this slot as a
+    /// *tagged* endpoint capability whose mask the kernel delivers to the server in the badge
+    /// word; `None` is an ordinary capability and behaves exactly as before.
+    ///
+    /// It lives at the slot, like `rights` and `badge`, because every derivation shares one
+    /// object. A derivation can only clear bits (`derive_ipc` intersects), so along any path in
+    /// the CDT the mask never grows -- `audit_cdt` code 9 checks that.
+    pub(crate) perms: Option<u16>,
+    /// **Send-time channel rule** (see `caprock_abi::ipc_chan`): `Some(rule)` marks this slot
+    /// as a channel-restricted endpoint capability; `CALL`/`CALL_TIMEOUT` through it passes
+    /// only for channels with `(channel & rule.mask) == rule.value`. `None` is unrestricted
+    /// and behaves exactly as before.
+    ///
+    /// It lives at the slot for the same reason as `perms`, and the same monotonicity holds
+    /// in the only form a `(value, mask)` pair allows: the rule is set exactly once
+    /// ([`derive_channel`](Self::derive_channel) refuses an already restricted source) and
+    /// preserved by every derivation afterwards — so along any CDT path the accepted set
+    /// never grows. `audit_cdt` code 10 checks well-formedness.
+    pub(crate) chan: Option<ipc_chan::Rule>,
     pub(crate) mdb: Mdb,
 }
 
@@ -97,6 +118,8 @@ impl CapSlot {
         rights: Rights::NONE,
         badge: 0,
         subregion: None,
+        perms: None,
+        chan: None,
         mdb: Mdb::EMPTY,
     };
 }
@@ -329,6 +352,21 @@ pub(crate) fn teilfenster_rechnen(
         return Err(CapError::Subregion);
     }
     Ok(PhysRegion::new(base, len))
+}
+
+/// Scan-Praedikat fuer [`CapSpace::audit_cdt`] Code 10: jede Kanalregel auf einem
+/// belegten Slot ist wohlgeformt — als freie Funktion ueber einem Slice, damit sie ohne
+/// `CapSpace` (und damit ohne `Slab`, dessen Anbindung `unsafe` ist) geprueft werden kann.
+///
+/// Regeln entstehen nur wohlgeformt ([`CapSpace::derive_channel`]) und wandern nur
+/// unveraendert (`copy` uebernimmt); Missbildung heisst Speicherfehler, nicht Ableitung.
+/// Der Test unten faehrt beide Ausgaenge — ein Pruefer ohne Gegenprobe gaelte hier nichts.
+fn chan_audit_clean(slots: &[CapSlot]) -> bool {
+    slots
+        .iter()
+        .filter(|s| s.used)
+        .filter_map(|s| s.chan)
+        .all(|rule| rule.is_wellformed())
 }
 
 /// `child` vorne in die Kinderliste von `parent` einhängen — die reine Verkettung von
@@ -705,8 +743,12 @@ impl CapSpace {
         let new_rights = self.slots[s].rights.intersect(rights);
         let badge = self.slots[s].badge;
         let fenster = self.slots[s].subregion;
+        let perms = self.slots[s].perms;
+        let chan = self.slots[s].chan;
         let dst = self.alloc_slot(obj, new_rights, badge)?;
         self.slots[dst].subregion = fenster;
+        self.slots[dst].perms = perms;
+        self.slots[dst].chan = chan;
         self.objects[obj].refcount += 1;
         self.link_child(s, dst);
         Ok(self.ptr(dst))
@@ -714,9 +756,145 @@ impl CapSpace {
 
     /// Wie [`copy`](Self::copy), zusätzlich mit gesetztem Badge.
     pub fn mint(&mut self, src: CapPtr, rights: Rights, badge: u64) -> Result<CapPtr, CapError> {
+        // A tagged capability keeps its permission mask in the high bits of the delivered badge
+        // word, so its id must fit the low 48 bits. Checked before anything is allocated.
+        if self.slot_perms(src)?.is_some() && !ipc_perm::id_fits(badge) {
+            return Err(CapError::Invalid);
+        }
         let dst = self.copy(src, rights)?;
         self.slots[dst.slot].badge = badge;
         Ok(dst)
+    }
+
+    /// The permission mask of the slot behind `ptr`: `Ok(None)` for an untagged capability.
+    pub fn slot_perms(&self, ptr: CapPtr) -> Result<Option<u16>, CapError> {
+        let s = self.resolve(ptr)?;
+        Ok(self.slots[s].perms)
+    }
+
+    /// May the holder of `ptr` derive further capabilities from it (`CCOPY`)?
+    ///
+    /// Untagged capabilities always may (unchanged behaviour); a tagged one needs
+    /// [`ipc_perm::DUP`]. Invalid handles answer `false`.
+    pub fn may_dup(&self, ptr: CapPtr) -> bool {
+        match self.slot_perms(ptr) {
+            Ok(None) => true,
+            Ok(Some(p)) => p & ipc_perm::DUP != 0,
+            Err(_) => false,
+        }
+    }
+
+    /// May the holder of `ptr` pass it on in a `REPLY` grant? Untagged: yes; tagged: needs
+    /// [`ipc_perm::GRANT`].
+    pub fn may_grant(&self, ptr: CapPtr) -> bool {
+        match self.slot_perms(ptr) {
+            Ok(None) => true,
+            Ok(Some(p)) => p & ipc_perm::GRANT != 0,
+            Err(_) => false,
+        }
+    }
+
+    /// **Derive a tagged IPC capability from an endpoint capability.**
+    ///
+    /// The result points at the same endpoint object, carries `rights` (intersected with the
+    /// source, like [`copy`](Self::copy)), the id `id` in its badge (`0` = inherit), and the
+    /// permission mask `effective(src) & mask`, where an untagged source counts as
+    /// [`ipc_perm::ALL`]. Permissions therefore only ever shrink along a derivation.
+    ///
+    /// * The source must be an endpoint capability -- other kinds have no server to attest to
+    ///   ([`CapError::Invalid`]).
+    /// * A tagged source needs [`ipc_perm::DUP`] ([`CapError::Invalid`] otherwise; the dispatch
+    ///   maps it to `ERR_RIGHTS`, see [`may_dup`](Self::may_dup)).
+    /// * `id` must fit 48 bits ([`CapError::Invalid`]).
+    /// * `mask == 0` is rejected: an all-clear tag is a capability that can do nothing, and `0`
+    ///   is the ABI's "not a tagged derivation" value.
+    pub fn derive_ipc(
+        &mut self,
+        src: CapPtr,
+        rights: Rights,
+        id: u64,
+        mask: u16,
+    ) -> Result<CapPtr, CapError> {
+        if mask == 0 || !ipc_perm::id_fits(id) {
+            return Err(CapError::Invalid);
+        }
+        let s = self.resolve(src)?;
+        if !matches!(self.objects[self.slots[s].object].kind, ObjectKind::Endpoint(_)) {
+            return Err(CapError::Invalid);
+        }
+        let have = self.slots[s].perms.unwrap_or(ipc_perm::ALL);
+        if self.slots[s].perms.is_some() && have & ipc_perm::DUP == 0 {
+            return Err(CapError::Invalid);
+        }
+        let dst = self.copy(src, rights)?;
+        if id != 0 {
+            self.slots[dst.slot].badge = id;
+        } else {
+            self.slots[dst.slot].badge &= ipc_perm::ID_MASK;
+        }
+        self.slots[dst.slot].perms = Some(have & mask);
+        Ok(dst)
+    }
+
+    /// The channel rule of the slot behind `ptr`: `Ok(None)` for an unrestricted capability.
+    pub fn slot_chan(&self, ptr: CapPtr) -> Result<Option<ipc_chan::Rule>, CapError> {
+        let s = self.resolve(ptr)?;
+        Ok(self.slots[s].chan)
+    }
+
+    /// **Derive a channel-restricted copy of an endpoint capability** (`CHAN`).
+    ///
+    /// The result points at the same endpoint object, carries `rights` (intersected with the
+    /// source, like [`copy`](Self::copy)), inherits badge, permission mask and subregion
+    /// unchanged, and gains the channel rule `(channel & mask) == value`.
+    ///
+    /// * The source must be an endpoint capability — other kinds have no `CALL` path to
+    ///   gate ([`CapError::Invalid`]).
+    /// * The rule must be well-formed: `mask != 0` and `value` within `mask`
+    ///   ([`CapError::Invalid`]); a vacuous or misleading rule is a caller bug, not a rule.
+    /// * At most one rule per cap: an already restricted source is refused
+    ///   ([`CapError::Invalid`]) — two `(value, mask)` pairs do not intersect in general,
+    ///   so narrowing would silently mean something else. Derive from the parent instead.
+    /// * A tagged source needs [`ipc_perm::DUP`](caprock_abi::ipc_perm::DUP)
+    ///   ([`CapError::Invalid`] otherwise; the dispatch maps it to `ERR_RIGHTS`).
+    pub fn derive_channel(
+        &mut self,
+        src: CapPtr,
+        rights: Rights,
+        value: u32,
+        mask: u32,
+    ) -> Result<CapPtr, CapError> {
+        let rule = ipc_chan::Rule { value, mask };
+        if !rule.is_wellformed() {
+            return Err(CapError::Invalid);
+        }
+        let s = self.resolve(src)?;
+        if !matches!(self.objects[self.slots[s].object].kind, ObjectKind::Endpoint(_)) {
+            return Err(CapError::Invalid);
+        }
+        if self.slots[s].chan.is_some() {
+            return Err(CapError::Invalid);
+        }
+        if self.slots[s].perms.is_some()
+            && self.slots[s].perms.unwrap_or(ipc_perm::ALL) & ipc_perm::DUP == 0
+        {
+            return Err(CapError::Invalid);
+        }
+        let dst = self.copy(src, rights)?;
+        self.slots[dst.slot].chan = Some(rule);
+        Ok(dst)
+    }
+
+    /// The badge word a server receives for a `CALL` through `ptr`: for a tagged capability the
+    /// id in the low 48 bits and the permission mask in the high 16
+    /// ([`ipc_perm::wire`]), otherwise the plain badge.
+    pub fn wire_badge(&self, ptr: CapPtr) -> Option<u64> {
+        let s = self.resolve(ptr).ok()?;
+        let slot = &self.slots[s];
+        Some(match slot.perms {
+            Some(p) => ipc_perm::wire(p, slot.badge),
+            None => slot.badge,
+        })
     }
 
     /// Einen **Teilbereich** einer Memory-Cap als eigene Cap ableiten (CSUB,
@@ -979,7 +1157,14 @@ impl CapSpace {
     /// 5 = Geschwister-Verkettung nicht reziprok,
     /// 6 = `first_child`-Verkettung kaputt (Kind unbelegt / falsches `parent`),
     /// 7 = Zyklus bzw. überlange Kette (CDT nicht baumförmig),
-    /// 8 = `refs` kürzer als die Objekttabelle — das Audit **konnte nicht laufen** (A-3.4).
+    /// 8 = `refs` kürzer als die Objekttabelle — das Audit **konnte nicht laufen** (A-3.4),
+    /// 9 = IPC-Berechtigungen **vergrößert**: ein Kind trägt Bits, die sein Elter nicht trägt
+    ///     (ein ungetaggter Elter zählt als alle Bits). Die Berechtigungsmaske darf entlang des
+    ///     CDT nur schrumpfen.
+    /// 10 = Kanalregel **missgebildet**: ein belegter Slot trägt `(value, mask)` mit
+    ///     `mask == 0` oder Wertbits ausserhalb der Maske. Regeln entstehen nur wohlgeformt
+    ///     ([`derive_channel`](Self::derive_channel)) und wandern nur unverändert
+    ///     (`copy` übernimmt) — Missbildung heisst Speicherfehler, nicht Ableitung.
     ///
     /// `refs` ist die Zählfläche für die Refcount-Prüfung und muss mindestens
     /// [`finalize_capacity`](Self::finalize_capacity) Einträge fassen; ihr Inhalt beim Eintritt
@@ -1056,6 +1241,18 @@ impl CapSpace {
                 if !found {
                     return 4;
                 }
+            }
+            // (9) IPC permissions never grow along a derivation. An untagged parent counts as ALL.
+            if let (Some(p), Some(child_perms)) = (m.parent, self.slots[s].perms) {
+                let parent_perms = self.slots[p].perms.unwrap_or(ipc_perm::ALL);
+                if child_perms & !parent_perms != 0 {
+                    return 9;
+                }
+            }
+            // (10) Channel rules are well-formed wherever they stand (see
+            // `chan_audit_clean` — same predicate the host unit test drives both ways).
+            if !chan_audit_clean(&self.slots.as_slice()) {
+                return 10;
             }
             if let Some(c) = m.first_child {
                 // first_child muss belegt sein, `parent == s` haben UND der **Listenkopf** sein
@@ -1207,6 +1404,8 @@ impl CapSpace {
             rights,
             badge,
             subregion: None,
+            perms: None,
+            chan: None,
             mdb: Mdb::EMPTY,
         };
         // Höchststand hier, im einzigen Belegungspfad: eine Stichprobe von aussen wuerde genau
@@ -1525,5 +1724,31 @@ mod tests {
         assert_eq!(slots[1].mdb.prev_sibling, Some(2));
         assert_eq!(slots[2].mdb.parent, Some(0));
         assert_eq!(count_children(&slots, 0, 8), Ok(2));
+    }
+
+    /// **Code 10 faehrt beide Ausgaenge.** Wohlgeformte Regeln (auch mehrere) bestehen;
+    /// eine einzige missgebildete — hier von Hand hingelegt, weil die API keine erzeugen
+    /// kann — faellt durch. Unbelegte Slots zaehlen nie, mit oder ohne Regel.
+    #[test]
+    fn kanal_audit_unterscheidet_wohlgeformt_von_missgebildet() {
+        use caprock_abi::ipc_chan::Rule;
+        let mut slots = [CapSlot::EMPTY; 3];
+        assert!(chan_audit_clean(&slots), "leere Tabelle ist sauber");
+        slots[0].used = true;
+        slots[0].chan = Some(Rule { value: 7, mask: 0xFFFF_FFFF });
+        slots[1].used = true;
+        slots[1].chan = Some(Rule { value: 0x1200, mask: 0xFF00 });
+        assert!(chan_audit_clean(&slots), "zwei saubere Regeln bestehen");
+        // Missbildung auf belegtem Slot: Maske null.
+        slots[2].used = true;
+        slots[2].chan = Some(Rule { value: 0, mask: 0 });
+        assert!(!chan_audit_clean(&slots), "Gegenprobe: missgebildete Regel faellt");
+        // Derselbe Eintrag unbelegt: unsichtbar, wie freier Speicher.
+        slots[2].used = false;
+        assert!(chan_audit_clean(&slots), "unbelegte Slots zaehlen nie");
+        // Wertbits ausserhalb der Maske: ebenfalls missgebildet.
+        slots[2].used = true;
+        slots[2].chan = Some(Rule { value: 0x1_0000, mask: 0xFFFF });
+        assert!(!chan_audit_clean(&slots), "Gegenprobe: Wert ausserhalb Maske faellt");
     }
 }

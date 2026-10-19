@@ -60,6 +60,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipcperm-cli"
+version = "0.0.1"
+dependencies = [
+ "libcaprock",
+]
+
+[[package]]
+name = "ipcperm-srv"
+version = "0.0.1"
+dependencies = [
+ "libcaprock",
+]
+
+[[package]]
 name = "libcaprock"
 version = "0.0.1"
 
