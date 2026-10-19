@@ -1,4 +1,4 @@
-//! **Seitenfarben** — die Arithmetik hinter der Cache-Partitionierung (`todo.md` A1).
+//! **Seitenfarben** — die Arithmetik hinter der Cache-Partitionierung (`TODO.md` A1).
 //!
 //! Der Last-Level-Cache ist physisch indiziert. Die Set-Indexbits, die *oberhalb* des
 //! Seitenoffsets liegen, hängen damit an der Physadresse und sind konstant für die gesamte

@@ -27,7 +27,7 @@
 //
 // Fuenf Befunde aus seinem ersten Lauf (2026-08-03). `lib.rs` blieb unangetastet.
 //
-// **BEFUND B1 — BEHOBEN am 2026-08-03 (todo.md D8).** Er lautete: der Code reiht BEDINGUNGSLOS
+// **BEFUND B1 — BEHOBEN am 2026-08-03 (TODO.md D8).** Er lautete: der Code reiht BEDINGUNGSLOS
 // wieder ein, waehrend `unblock` unten `in_ready: !t.depleted` setzt. Ein blockierter UND
 // MCS-erschoepfter Thread landete damit in der Ready-Liste — `ridx` verletzt,
 // `unblock_preserves` galt fuer diesen Uebergang nicht.
@@ -155,7 +155,7 @@ pub open spec fn pick(s: Sched, n: int) -> Sched {
 /// **unblock:** einen blockierten Thread `i` wieder bereit machen (idempotent im Code; hier auf den
 /// blockierten Fall spezifiziert). Wird genau dann wieder eingereiht, wenn nicht erschoepft.
 ///
-/// **Seit 2026-08-03 deckt sich der Code hier** (BEFUND B1 behoben, s. Dateikopf und todo.md D8):
+/// **Seit 2026-08-03 deckt sich der Code hier** (BEFUND B1 behoben, s. Dateikopf und TODO.md D8):
 /// `Scheduler::unblock` traegt den `!depleted`-Waechter INNERHALB seines Rumpfes. Bis dahin war
 /// dieses `!t.depleted` die Forderung der Invariante und nicht der Zustand des Codes.
 /// `tools/verus-modelltreue-sched.sh` haelt die verbliebene Uebertragungsluecke fest — sie redet

@@ -96,7 +96,7 @@ echo "== Z6 Stufe 1: beisst die Politik? =="
 # Gemessen am 2026-08-17: `bringup : offen waren: cores sweep ist verif` -- vier Konjunkte des
 # SELBSTTESTS, die voraussetzen, dass jeder konfigurierte Kern tickt (`sched : core 1 ticks=0`).
 # Das Abbild ist fuer "alle MADT-CPUs kommen hoch" geschrieben; mit Stufe 1 tun sie das nicht mehr.
-# Eine Annahme des Testabbilds, kein Kerneldefekt -- und ein eigener Eintrag in `todo.md` Z6.
+# Eine Annahme des Testabbilds, kein Kerneldefekt -- und ein eigener Eintrag in `TODO.md` Z6.
 #
 # Deshalb urteilt dieses Skript ueber die `smt`-Zeile und **nicht** ueber den Ausgang des Laufs.
 L1=build/diag/smt-threads2.log

@@ -56,7 +56,7 @@
 //! Die `vspace_*`-Funktionen (per-Prozess-Adressräume isolierter PDs, ext-11ff) melden hier
 //! ehrlich „nicht unterstützt" statt etwas Halbes zu tun: der Kernel fängt das ab und
 //! erzeugt auf x86 keine isolierten PDs. Sie brauchen zusätzlich PCID-Verwaltung und ein
-//! per-VSpace-Tabellenlayout — ein eigener Portierungsschritt (s. `todo.md`).
+//! per-VSpace-Tabellenlayout — ein eigener Portierungsschritt (s. `TODO.md`).
 
 use super::cpu;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -949,7 +949,7 @@ pub fn set_user_vspace(root: u64, _asid: u16) {
 /// und eine zu große ASID würde auf eine andere aliasen (Isolationsbruch). Auf x86 gäbe es
 /// dafür PCIDs; hier ist die Kennung vorerst eine reine **Software**-Nummer des Kernels, und
 /// jeder `CR3`-Wechsel flusht den TLB ohnehin vollständig. Damit kann sie nicht aliasen — die
-/// Obergrenze ist reine Buchhaltung. (PCID nachzurüsten ist eine reine Optimierung, s. todo.md.)
+/// Obergrenze ist reine Buchhaltung. (PCID nachzurüsten ist eine reine Optimierung, s. TODO.md.)
 pub fn max_asid() -> u16 {
     u16::MAX
 }
@@ -1407,7 +1407,7 @@ pub fn vspace_collect_l3s(l2_phys: u64, free_l3: &mut dyn FnMut(u64)) {
 
 /// Geräte-MMIO in einen isolierten Adressraum mappen — auf x86 liegt MMIO oberhalb von GiB 0
 /// in **geteilten**, supervisor-only Tabellen (`ISO_PD_HIGH`). Eine PD-eigene Geräteabbildung
-/// bräuchte dort eine private Tabelle; das kommt mit dem HardwareLand-Port (s. todo.md).
+/// bräuchte dort eine private Tabelle; das kommt mit dem HardwareLand-Port (s. TODO.md).
 pub fn vspace_map_device(
     l1_phys: u64,
     phys: u64,

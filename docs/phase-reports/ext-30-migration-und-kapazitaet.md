@@ -1,6 +1,6 @@
 # ext-30 — Thread-Migration + flexible Kapazitäten (Abschlussbericht)
 
-Backlog: [todo.md](../../todo.md) B + C. Invarianten: [invariants.md §1, §11](../invariants.md).
+Backlog: [TODO.md](../../TODO.md) B + C. Invarianten: [invariants.md §1, §11](../invariants.md).
 
 ## Ziel
 
@@ -82,7 +82,7 @@ einem Intervall (`BALANCE_INTERVAL_TICKS`), weil Migration Cache-Lokalität kost
 **Der Schalter `system::set_balancing()` steht per Default auf AUS.** Der Mechanismus ist
 fertig und getestet; die Demo-/Testthreads *dieses Images* setzen aber teils feste Affinität
 voraus (Cross-Core-IPC-Test, Budget-Donation, Platzierungs-Telemetrie). Die Trennung ist
-bewusst: „Mechanismus fertig" ≠ „Policy standardmäßig an". Offen in [todo.md](../../todo.md) B4.
+bewusst: „Mechanismus fertig" ≠ „Policy standardmäßig an". Offen in [TODO.md](../../TODO.md) B4.
 
 ## 4. Kapazität kommt zur Boot-Zeit aus dem RAM
 
@@ -156,11 +156,11 @@ fünf Fuzzer (der Domänen/HW- und der IPC-Fuzzer laufen gegen die neue Schedule
 * **Mehr als 8 Kerne sind auf ARM weiterhin nicht testbar**: die HAL spricht **GICv2**
   (8-CPU-Grenze, 8-Bit-Zielmaske in `GICD_SGIR`). Dafür braucht es GICv3 (Redistributoren je
   Kern, `ICC_SGI1R_EL1`, ITS). Die Kapazitäten sind vorbereitet, die Interrupt-Hardware nicht.
-  → [todo.md](../../todo.md) C5.
+  → [TODO.md](../../TODO.md) C5.
 * **Cap-/PD-/Endpoint-/Notification-Tabellen** sind weiterhin `.bss`-Arrays fester Größe.
-  → todo.md C3 (blockiert durch `ReplyFinal` auf dem Kernelstack, A3).
+  → TODO.md C3 (blockiert durch `ReplyFinal` auf dem Kernelstack, A3).
 * **x86-64** (die eigentliche EPYC-Zielarchitektur) ist ein HAL-Port: Boot, Exceptions/Syscalls,
   MMU, APIC, Timer, IOMMU. Der Capability-/IPC-/Scheduler-Kern ist portabel, die HAL nicht.
-  → todo.md C6.
+  → TODO.md C6.
 * Kernel-Threads haben weiterhin **64 KiB** Stack — bei zehntausenden Threads ist das die
   bestimmende Speichergröße, nicht die Tabellen.

@@ -4,7 +4,7 @@
 //! printed `smmu` (IDR0, SIDSIZE, SMMUEN, CMD_SYNC round trip, event queue, GERROR), x86 printed
 //! `iommu`/`vtdcaps`/`vtdgrp` (version, CAP, GSTS.TES, context-cache acknowledgement). Both
 //! implementations are complete — but there was **no single sentence that means the same thing on
-//! both sides**, and `todo.md` had named that in advance as the warning sign: *"a separate
+//! both sides**, and `TODO.md` had named that in advance as the warning sign: *"a separate
 //! `vtdtest` would mean the properties are worded differently on x86, and then a second design
 //! does exist after all."*
 //!

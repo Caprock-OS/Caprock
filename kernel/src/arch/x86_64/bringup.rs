@@ -16,7 +16,7 @@
 //! | `ipc` | cap-gesicherter `CALL`/`RECV`/`REPLY` zwischen zwei Protection Domains |
 //! | `audit` | Scheduler- + CDT-Audit nach dem Lauf sauber |
 //!
-//! Noch **nicht** auf x86 (s. `todo.md`): SMP (INIT-SIPI-SIPI), isolierte Adressräume
+//! Noch **nicht** auf x86 (s. `TODO.md`): SMP (INIT-SIPI-SIPI), isolierte Adressräume
 //! (PCID + per-VSpace-Tabellen), Ring-3-PDs im Kernel-Kern, Boot-Archiv/Loader, IOMMU.
 
 use crate::system;
@@ -7073,7 +7073,7 @@ pub fn run(multiboot_info: u64) -> ! {
         // Bis hierher hat jede Architektur in ihren eigenen Worten berichtet: aarch64 als `smmu`
         // (IDR0, SIDSIZE, SMMUEN, CMD_SYNC-Round-Trip, Event-Queue, GERROR), x86 als
         // `iommu`/`vtdcaps`/`qi`/`ir`. Beide Fassungen sind vollstaendig -- aber es gab KEINEN
-        // Satz, der auf beiden Seiten dasselbe bedeutet, und genau das hatte `todo.md` vorab als
+        // Satz, der auf beiden Seiten dasselbe bedeutet, und genau das hatte `TODO.md` vorab als
         // Warnsignal benannt: zwei Formulierungen sind zwei Entwuerfe.
         //
         // `inv` wird HEREINGEREICHT statt hier neu erhoben: eine Gesundheitsabfrage darf keine

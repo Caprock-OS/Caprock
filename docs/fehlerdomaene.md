@@ -48,7 +48,7 @@ die nicht sagt, was sie nicht zusichert, ist keine.
 * **Kein zuverlässiges Anhalten bei einem Kernel-Panic.** Siehe [§2](#2-was-heute-wirklich-passiert-gemessen) —
   das ist der unangenehmste Befund dieses Dokuments und **schwächer** als die Festlegung oben.
 * **Keine PD-Granularität bei Wartung.** Es gibt heute keine Live-Migration einzelner PDs
-  (`todo.md` Z3/Z4). Einen Knoten leeren heißt: jeden Mandanten darauf neu starten.
+  (`TODO.md` Z3/Z4). Einen Knoten leeren heißt: jeden Mandanten darauf neu starten.
 * **Keine Trennung zwischen PDs im globalen SAS-Adressraum.** Sie bilden untereinander **eine**
   Domäne; ihre Grenze ist eine Quelltext-Eigenschaft, keine Hardwaregrenze. Siehe
   [§3](#3-trustedsas--der-fall-der-aus-dem-modell-folgt).
@@ -57,7 +57,7 @@ die nicht sagt, was sie nicht zusichert, ist keine.
 
 ## 2. Was heute wirklich passiert (gemessen)
 
-Die Notiz in `todo.md` Z9 lautete: *„Ein Kernel-Panic reißt heute den ganzen Knoten mit."*
+Die Notiz in `TODO.md` Z9 lautete: *„Ein Kernel-Panic reißt heute den ganzen Knoten mit."*
 **Das stimmt so nicht — und das Gegenteil ist keine gute Nachricht.**
 
 Der Grund steht in zwei Zeilen. Der Panic-Handler (`kernel/src/panic.rs:9–25`) druckt und ruft
@@ -242,7 +242,7 @@ Die Fehlerdomänen-Aussage hängt also am Adressraum, nicht am Domänen-Etikett:
 ## 4. Der Unterschied zur VM — ehrlich
 
 Das ist ein **Produktrisiko**, kein Implementierungsdetail. Caprock tritt an, um VMs zu ersetzen
-([Z1](../todo.md)); an dieser Stelle ist es schlechter als eine VM, und das muss dastehen.
+([Z1](../TODO.md)); an dieser Stelle ist es schlechter als eine VM, und das muss dastehen.
 
 |  | Wirt mit 100 VMs | Caprock-Knoten mit 100 PDs |
 |---|---|---|
@@ -329,7 +329,7 @@ Nichts davon ist gebaut. Die Aufwände sind Schätzungen, die Reihenfolge ist Nu
 | 4 | **Panic → `system_off`.** Der panickende Kern schaltet die Maschine ab (ACPI S5 / PSCI `SYSTEM_OFF`); beide Wege existieren bereits (`x86_64/power.rs:295`, `aarch64/psci.rs:20`) und werden heute nur aus Testabschlusspfaden gerufen, **nie** aus `panic.rs`. | **~1 h** | Die einfachste Art, die Festlegung aus §1 zur **Tatsache** zu machen. Preis: die Ausgabe der anderen Kerne bricht mitten im Satz ab, und der Knoten ist sofort weg statt geordnet geleert. |
 | 5 | **Schranke im Ticket-Lock.** `SpinLock::lock` dreht unbegrenzt (`crates/caprock-sync/src/lib.rs:170–178`). Eine Obergrenze, die bei Überschreitung meldet und anhält. | **klein im Code, groß in der Abnahme** | Verwandelt Fall E aus einem stillen Totalausfall in einen diagnostizierten. **Aber:** das ist die zentrale Synchronisationsprimitive; jede Änderung daran zieht Loom (B-7.2) und Kani (B-7.1) nach sich, und eine zu knappe Schranke erzeugt Fehlalarme unter Last. Nicht „billig" im Sinne von risikoarm. |
 | 6 | **`#DF`-Handler mit eigenem IST-Stack (x86).** Vektor 8 ist heute nur **benannt**. | **klein–mittel, HAL** | Ohne IST endet ein `#DF` auf kaputtem Stack im Triple Fault (Neustart ins BIOS). Mit IST gibt es eine letzte Meldung. |
-| 7 | **Schutzseiten an Kernel-Stacks.** Heute gibt es keine; ein Überlauf läuft still in Nachbarspeicher. | **mittel** | Macht Stacküberläufe (auch außerhalb von Panics) zu einem Fault statt zu stiller Verfälschung. Kostet eine Seite je Stack — bei 64 KiB je Thread und dem Zielbild „viele tausend Prozesse" ist das zu rechnen (`todo.md` C4). |
+| 7 | **Schutzseiten an Kernel-Stacks.** Heute gibt es keine; ein Überlauf läuft still in Nachbarspeicher. | **mittel** | Macht Stacküberläufe (auch außerhalb von Panics) zu einem Fault statt zu stiller Verfälschung. Kostet eine Seite je Stack — bei 64 KiB je Thread und dem Zielbild „viele tausend Prozesse" ist das zu rechnen (`TODO.md` C4). |
 | 8 | **Panic-IPI/NMI an alle Kerne.** Die IPI-Maschinerie existiert (`system.rs:432` `kick`, `send_sgi`), aber **kein NMI**. | **mittel** | Ein normaler IPI erreicht keinen Kern mit maskierten IRQs — genau den Fall, den man treffen will. Zuverlässig braucht es NMI (x86) bzw. FIQ/`sgi` an einer Gruppe-0-Quelle (ARM), und beides existiert im Projekt nicht. Deshalb ist #3+#4 der bessere erste Schritt. |
 
 **Empfehlung:** #1 + #2 + #4 zusammen (Größenordnung ein halber Tag) machen die Festlegung aus §1

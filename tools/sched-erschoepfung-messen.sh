@@ -1828,7 +1828,7 @@ H_A='s = s.replace("""                            && self.tcbs[d].used
 # Vorschlag aus D9 (`budget_blocked`, der Refill weckt den ganzen Spenden-STAPEL). Er ist seit
 # Commit 068db2a in `crates/caprock-sched/src/lib.rs` -- und damit ist die Fassung `echt` die
 # Fassung H-b. Ihn hier stehen zu lassen hiesse, das Feld ein zweites Mal einzufuegen; das
-# Werkzeug wuerde mit einem Uebersetzungsfehler abbrechen. Was H-b war, steht in `todo.md` (D9)
+# Werkzeug wuerde mit einem Uebersetzungsfehler abbrechen. Was H-b war, steht in `TODO.md` (D9)
 # und im Commit; was H-b TUT, misst jede Zeile der D-Reihe an der Fassung `echt`.
 
 # --- D10 (2026-08-03) -------------------------------------------------------------------------

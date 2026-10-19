@@ -26,7 +26,7 @@ use caprock_sched::{redirect, SchedOps, ThreadId};
 use caprock_slab::Slab;
 use caprock_sync::{RwSpinLock, SpinLock};
 
-/// Variabler PD-Cspace: Vergabe, Absagen, Freigabe (todo.md A3, TODO0 K1c).
+/// Variabler PD-Cspace: Vergabe, Absagen, Freigabe (TODO.md A3, TODO0 K1c).
 ///
 /// Abhaengigkeitsfrei (`core` nur) und per `rustc --test` als Datei pruefbar — die
 /// Buchhaltung steht genau einmal dort, `PdTable` ruft sie auf, statt sie nachzubauen.
@@ -1238,7 +1238,7 @@ impl PdTable {
     /// die Handler-*Cap* noch im Cspace der Handler-PD liegt. Geprüft wird, ob die PD existiert
     /// und nicht stillgelegt ist. Eine gelöschte Cap bei lebender PD führt heute dazu, dass der
     /// Handler nicht mehr `RECV`t — der Gast wartet dann in `BlockReasons::HANDLER`, statt zu
-    /// faulten. **Das ist eine offene Lücke** (todo.md Z26/A3), und sie steht hier, weil ein
+    /// faulten. **Das ist eine offene Lücke** (TODO.md Z26/A3), und sie steht hier, weil ein
     /// Prüfer, der die falsche Größe liest, den Fehler strukturell nicht sehen kann.
     pub fn handler_lebt(&self, handler_pd: u16) -> bool {
         let i = handler_pd as usize;
@@ -2736,7 +2736,7 @@ fn dispatch_nativ(
             // **OFFEN und ausdruecklich nicht hier entschieden (S1b):** was ein FREMDER Aufrufer
             // erlebt, der in diese PD hineinruft. Das Subjekt-Gating stoppt nur, was sie selbst
             // anfaengt; ihre Endpoints existieren weiter, und ein Dritter blockiert dort bis zum
-            // Thaw. Drei Optionen stehen in `todo.md` Z23/S1b -- keine ist gratis, und eine
+            // Thaw. Drei Optionen stehen in `TODO.md` Z23/S1b -- keine ist gratis, und eine
             // stillschweigende Wahl waere die schlechteste.
             if nr != sys::REPLY && caps.read().pds.is_quiescing(pd) {
                 return deny(result::ERR_QUIESCING);

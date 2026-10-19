@@ -2630,7 +2630,7 @@ fn mem_alloc_anywhere(size: u64, align: u64) -> Option<MemoryCap> {
 /// Region einer isolierten PD, die Code-/Stack-Frames von [`spawn_isolated_native`] und
 /// [`alloc_dma_region`]. Diese bekommen `None` statt einer unbrauchbaren Adresse.
 ///
-/// **Noch nicht klassifiziert** (bewusst konservativ auf [`Zone::IdentityMapped`], s. `todo.md`):
+/// **Noch nicht klassifiziert** (bewusst konservativ auf [`Zone::IdentityMapped`], s. `TODO.md`):
 /// die EL0-Kernel-Stacks ([`claim_user_kstack`]), der EL0-User-Stack von [`spawn_user`], die
 /// IOMMU-Tabellen (`alloc_zeroed`) und die Sentinel-Page des DMA-Tests. Fuer keine davon ist
 /// gezeigt, dass sie oben liegen **darf**; „konservativ" heisst hier ungeprueft, nicht sicher.
@@ -3516,7 +3516,7 @@ static MIGRATIONS: AtomicUsize = AtomicUsize::new(0);
 /// Migrationsmechanik ist vollständig und getestet, aber die Demo-/Testthreads dieses
 /// Images setzen teils feste Kern-Affinität voraus (Cross-Core-IPC-Test, Budget-Donation,
 /// Platzierungs-Telemetrie). Der Schalter trennt „Mechanismus fertig" von „Policy
-/// standardmäßig an" — s. `todo.md` B4.
+/// standardmäßig an" — s. `TODO.md` B4.
 static BALANCING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 /// Tick-Zähler je Kern für das Ausgleichs-Intervall.
 static BALANCE_TICK: [AtomicU64; MAX_CORES] = [const { AtomicU64::new(0) }; MAX_CORES];
@@ -8964,7 +8964,7 @@ fn window_size(first: u64) -> u64 {
 /// der nächste Kontext desselben Slots dieselben IOVAs — und ein Gerät, dessen ATC-Eintrag oder
 /// in-flight Request die alte Zuordnung trägt, träfe auf eine gültige Abbildung fremder
 /// Regionen. Nicht-Wiederverwendung ist der Preis dafür, dass die Reihenfolge beim Teardown eine
-/// bewiesene und keine erzwungene Eigenschaft ist (s. Teardown-Token in `todo.md`).
+/// bewiesene und keine erzwungene Eigenschaft ist (s. Teardown-Token in `TODO.md`).
 static SLOT_IOVA_NEXT: [AtomicU64; NDMA_CTX] = [const { AtomicU64::new(0) }; NDMA_CTX];
 
 /// Das Fenster des Slots `slot`: `(base, limit, strong)`.
@@ -12028,7 +12028,7 @@ pub fn pd_partner(pd: usize) -> Option<usize> {
 // das nur `admit` konsumieren kann, machte das Vergessen zum Typfehler. Es waere aber auch ein
 // Umbau aller 93 Spawn-Stellen, und der Zaehler leistet dasselbe ueber eine MESSUNG statt ueber
 // eine Portierung -- er sieht auch die Stellen, die es morgen erst gibt. Als Verschaerfung in
-// `todo.md` D0 vermerkt.
+// `TODO.md` D0 vermerkt.
 
 /// **Ein erzeugter, aber noch nicht zugelassener Thread** (D0, verschaerft 2026-08-07).
 ///
@@ -14127,7 +14127,7 @@ pub fn thread_is_group_frozen(tid: ThreadId) -> bool {
 /// Freeze-Autoritaet — dieselbe Regel wie beim Partnernamen in [`Freeze::BusyOn`], und aus
 /// demselben Grund: wer eingefroren hat, weiss ohnehin, dass und wie lange.
 ///
-/// **Was damit NICHT geloest ist, und es steht in `todo.md`:** die eingefrorene PD selbst erfaehrt
+/// **Was damit NICHT geloest ist, und es steht in `TODO.md`:** die eingefrorene PD selbst erfaehrt
 /// die Dauer nicht — dafuer braeuchte es einen Selbstauskunfts-Syscall. Ein Thread, der vor dem
 /// Freeze eine Frist aus `rdtsc` gerechnet hat, kann sie danach also **nicht** berichtigen. Das ist
 /// eine benannte Luecke und kein Nebeneffekt.

@@ -107,7 +107,7 @@ const W: u64 = 7; // wie `init`: die Maske wird GESCHNITTEN, nicht verstaerkt
 // Bis dahin ist der Heap ein Feld im `.bss`, das der Lader als Segment mitanlegt. Das ist keine
 // Notloesung, sondern genau das Modell, das WASM ohnehin hat: der Linearspeicher eines Gastes
 // steht bei der Instanziierung fest. Was damit **nicht** geht, ist `memory.grow` -- und das steht
-// als W3 in `todo.md`, statt hier stillschweigend zu fehlen.
+// als W3 in `TODO.md`, statt hier stillschweigend zu fehlen.
 const HEAP_BYTES: usize = 1 << 21; // 2 MiB -- gemessen: 1 233 KiB Hoechststand
                                    // realistisches Modul, plus Luft fuer die Engine selbst
 static mut ARENA: [u8; HEAP_BYTES] = [0; HEAP_BYTES];

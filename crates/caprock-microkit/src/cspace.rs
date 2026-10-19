@@ -1,4 +1,4 @@
-//! Variabler PD-Cspace: Vergabe, Absagen, Freigabe (todo.md A3, TODO0 K1c).
+//! Variabler PD-Cspace: Vergabe, Absagen, Freigabe (TODO.md A3, TODO0 K1c).
 //!
 //! `NCAPS = 16` war eine harte Schranke: der lokale Cspace einer PD war ein Array
 //! `[Option<CapPtr>; 16]` in `Pd`, und `install_cap` wies jeden Slot `>= 16` ab, ohne

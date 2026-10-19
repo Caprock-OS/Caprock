@@ -156,7 +156,7 @@ impl PhysAllocator {
     }
 
     /// Wie [`alloc`](Self::alloc), aber **jede Seite** der gelieferten Region trägt eine Farbe
-    /// aus `mask` (Cache-Partitionierung, `todo.md` A1).
+    /// aus `mask` (Cache-Partitionierung, `TODO.md` A1).
     ///
     /// Aufeinanderfolgende Seiten tragen aufeinanderfolgende Farben. Eine zusammenhängende
     /// Region über `n` Seiten überstreicht also `n` aufeinanderfolgende Farben — **das ist die
@@ -182,7 +182,7 @@ impl PhysAllocator {
     /// Wie [`alloc_colored`](Self::alloc_colored), aber zusätzlich mit dem Zonenwunsch aus
     /// [`alloc_below`](Self::alloc_below). Farbe **und** Zone werden hier gemeinsam entschieden;
     /// zwei nacheinander laufende Politiken würden gegeneinander arbeiten (dasselbe Argument
-    /// steht in `todo.md` Z8 für Farbe und NUMA-Knoten).
+    /// steht in `TODO.md` Z8 für Farbe und NUMA-Knoten).
     pub fn alloc_colored_below(
         &mut self,
         size: u64,
@@ -525,7 +525,7 @@ mod tests {
         );
         // Und der Klassiker: eine 2-MiB-Region (512 Seiten) ist mit KEINER echten
         // Teilmaske erfuellbar -- genau der Grund, warum der 2-MiB-Blockdeskriptor
-        // der isolierten PD nicht gefaerbt werden kann (s. todo.md A1).
+        // der isolierten PD nicht gefaerbt werden kann (s. TODO.md A1).
         assert!(a.alloc_colored(512 * PAGE, 512 * PAGE, COLORS, m).is_none());
     }
 

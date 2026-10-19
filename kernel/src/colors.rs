@@ -4,7 +4,7 @@
 //! entscheidet ihre **Physadresse**. Die Bits des Set-Index, die oberhalb des Seitenoffsets
 //! liegen, sind die *Farbe* der Seite. Zwei Seiten verschiedener Farbe können einander im LLC
 //! nicht verdrängen — und genau das ist der Hebel gegen den Zeitseitenkanal zwischen zwei PDs
-//! (`todo.md` A1): bekommt jede PD einen disjunkten Farbsatz, beobachtet keine mehr die
+//! (`TODO.md` A1): bekommt jede PD einen disjunkten Farbsatz, beobachtet keine mehr die
 //! Verdrängungen der anderen.
 //!
 //! ## Was hier gemessen und was entschieden wird

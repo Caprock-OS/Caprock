@@ -2422,7 +2422,7 @@ fn zahlenpolitik_gate(program_id: u32) -> Result<(), LoaderError> {
     // aufgerundet -- eine stille Vervielfachung.
     //
     // Das ist deshalb eine **Formatfrage**, keine Kernelfrage: solange das Manifest keine Periode
-    // traegt, ist `budget_us` nicht einhaltbar. Steht als offener Punkt in `todo.md` Z11c.
+    // traegt, ist `budget_us` nicht einhaltbar. Steht als offener Punkt in `TODO.md` Z11c.
     if budget != 0 {
         #[cfg(feature = "debug-log")]
         println!(
@@ -2495,7 +2495,7 @@ fn ladepolitik_auf(
         // `priority = 0` heisst im Manifest "nichts gesagt" -- 0 ist im Scheduler eine gueltige
         // (die niedrigste) Prioritaet, aber ein Dokument, das schweigt, soll die Vorgabe bekommen
         // und nicht die niedrigste. Wer wirklich 0 will, sagt es heute nicht unterscheidbar; das
-        // ist eine Formatgrenze und steht als solche in `todo.md`.
+        // ist eine Formatgrenze und steht als solche in `TODO.md`.
         prio: if prio == 0 { LadePolitik::VORGABE.prio } else { prio as u8 },
         // **Die Rangfolge steht hier und nur hier** (N4): eine ausdrueckliche `core_affinity`
         // sticht -- sie benennt EINEN Kern und ist damit praeziser als ein Knoten. Sagt das

@@ -90,7 +90,7 @@ host-tested since this step. What remains:
 1. **Multi-vector:** one vector per device means single queue; MSI-X with one
    vector per queue is open (§5, B edge) — additionally needs a variable Cspace.
 2. **Variable Cspace:** `NCAPS = 16`, hard; for more caps per PD a variable
-   Cspace is needed (TODO0 K1c). Affects `request_irq` (cap per vector)
+   Cspace is needed (TODO.md Part II K1c). Affects `request_irq` (cap per vector)
    and every driver PD with a large cap demand.
 3. **Logging sink stands, wiring open:** `dev_err`/`printk` map onto
    `caprock-log` (ring, filter, `kern_stufe`); what is missing is the reader side in the

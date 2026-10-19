@@ -376,7 +376,7 @@ impl Endpoint {
     /// nennen — man zoege den Falschen zur Rechenschaft.
     ///
     /// **An WEN diese Auskunft gehen darf, entscheidet der Aufrufer, nicht diese Funktion**, und
-    /// die Regel steht in `todo.md` Z23/S2: an den Halter der Freeze-Autoritaet, **nie** an die
+    /// die Regel steht in `TODO.md` Z23/S2: an den Halter der Freeze-Autoritaet, **nie** an die
     /// eingefrorene PD. Eine Fehlermeldung mit einem fremden Threadnamen darin ist ein Kanal, mit
     /// dem sich die IPC-Topologie anderer PDs ausforschen laesst.
     pub fn partner_of(&self, tid: ThreadId) -> Option<ThreadId> {

@@ -19,7 +19,7 @@ Messkette — gehört nach `tools/` bzw. ins Userland, nicht in einen eigenen Lo
   ohne den Kernel zu informieren (AGENTS.md, Mitteilung 3).
 - **Echt-Hardware-Pfad:** `tools/mkgrubiso.sh` baut ein GRUB-El-Torito-ISO aus
   Kernel + Boot-Archiv (`multiboot /boot/kernel.mb32`, `module /boot/boot-archive.bin`).
-  Belegt 2026-08-01 (todo.md Z11a): ein echter Bootloader liefert nachweislich
+  Belegt 2026-08-01 (TODO.md Z11a): ein echter Bootloader liefert nachweislich
   **dasselbe** wie QEMUs `-kernel`/`-initrd` — Speicherplan, ein Modul,
   `mbmod : ALL PASS`, `archive : 2 Modul(e) -> ALL PASS`, Root-Task läuft,
   `SELFTEST COMPLETE`. Einziger Unterschied: die Ladeadresse des Moduls, wie erwartet.
@@ -111,7 +111,7 @@ Was **konkret fehlt** (Lückenliste, kein Bootloader):
 - Diese Datei ist die Entscheidung mit Befund (Quellen: `test-qemu-x86-load.sh`
   `boot()`, `test-qemu.sh` `boot_once()`, `tools/mkgrubiso.sh`, `tools/mkarchive.py`,
   `kernel/src/loader.rs` `set_archive_span`/`archive_span`, `kernel/src/arch/aarch64/boot.rs`,
-  `todo.md` Z11a/Z7, `todo-B-verlaesslichkeit.md` B-6.1, `docs/plan-betriebsbereit.md` Stufe 3).
+  `TODO.md` Z11a/Z7, `todo-B-verlaesslichkeit.md` B-6.1, `docs/plan-betriebsbereit.md` Stufe 3).
 - `tools/lx_bootcheck.sh --help` / ohne Argumente prüft den Befund am Baum nach
   (Multiboot-Magic-Lage im `mb32`, Archiv-Werkzeuge, GRUB-Werkzeuge, QEMU-Befehlszeilen
   beider Arches) — Demo ohne Boot, ohne Schreiben an bestehenden Dateien.

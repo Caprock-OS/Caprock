@@ -54,7 +54,7 @@ Drei Angaben unten stimmen so nicht. Gemessen an `/home/simon/Schreibtisch/FastL
 3. **Die freestanding-Vorgabe ist ein statischer 16-MiB-Heap in `.bss`** (`plat_heap`,
    First-Fit-Freiliste, kein `brk`/`mmap`; über `-DFASTLLVM_HEAP_SIZE` änderbar). Das ist
    die wichtigste Zahl für Caprock: die private Region einer isolierten PD ist heute
-   **2 MiB**, und die Mandantendichte hängt genau daran (`RAM / 2 MiB`, s. `todo.md` C7).
+   **2 MiB**, und die Mandantendichte hängt genau daran (`RAM / 2 MiB`, s. `TODO.md` C7).
    Eine Vire-Komponente mit Vorgabeheap kostete **das Achtfache**. Der Ausweg steht
    unten schon richtig — `plat_*` auf `caprock-region` legen —, aber er ist damit nicht
    „gut zu haben", sondern **Pflicht**, bevor eine Zahl über Dichte wieder gilt.

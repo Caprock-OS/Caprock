@@ -173,7 +173,7 @@ for i, sektionen in enumerate(zuordnung):
         print(f"BUILD FAILED: LOAD @ {vaddr:#x} traegt {filesz} Byte Dateiinhalt, enthaelt aber "
               f"nur NOBITS-Sektionen ({', '.join(echte)}).", file=sys.stderr)
         print("  Signatur eines reihenfolgeabhaengigen Layouts: der Linker schreibt den", file=sys.stderr)
-        print("  BSS-Bereich als Datei aus, um etwas dahinter zu platzieren. S. todo.md.", file=sys.stderr)
+        print("  BSS-Bereich als Datei aus, um etwas dahinter zu platzieren. S. TODO.md.", file=sys.stderr)
         schlecht += 1
 sys.exit(1 if schlecht else 0)
 PYEOF

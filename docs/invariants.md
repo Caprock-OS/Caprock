@@ -1012,7 +1012,7 @@ genau das: `unsafe_status == ALL_PASS`), niemals an einem fremden Binary.
 Folgerungen: der **isolierte** Pfad ist der Produktpfad, und seine Leistung ist das Produkt. Das
 Zertifikats-Gate ist ein **Betreiberwerkzeug, keine Kundenschnittstelle** — ein Weg, auf dem ein
 Kunde ein TrustedSAS-Zertifikat erlangen könnte, wäre ein Entwurfsfehler. Und Attestierung
-(`todo.md` Z7) betrifft die **Maschine**, nicht das Kundenbinary: der Kunde will wissen, *worauf*
+(`TODO.md` Z7) betrifft die **Maschine**, nicht das Kundenbinary: der Kunde will wissen, *worauf*
 er läuft, nicht beweisen, *was* er mitbringt.
 
 ---

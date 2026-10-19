@@ -59,7 +59,7 @@ pub mod cache_decode;
 pub mod fault;
 // **Die IOMMU-Gesundheit als EINE Aussage** — arch-neutral, weil sie es inhaltlich ist. Bis dahin
 // berichtete jede Architektur in ihren eigenen Worten (`smmu` gegen `iommu`/`vtdcaps`), und genau
-// das hatte `todo.md` vorab als Warnsignal benannt: zwei Formulierungen sind zwei Entwuerfe.
+// das hatte `TODO.md` vorab als Warnsignal benannt: zwei Formulierungen sind zwei Entwuerfe.
 // Reiner Typ ueber eingespeisten Werten, deshalb einzeln host-testbar (Muster von `dmar.rs`).
 pub mod iommu_health;
 // Der zweite Summand der C4-Stackrechnung. Arch-neutral, weil er es INHALTLICH ist (zwei

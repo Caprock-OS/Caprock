@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# **B4b-Messstand** (todo.md B4b): die Umgebung als Variable behandeln.
+# **B4b-Messstand** (TODO.md B4b): die Umgebung als Variable behandeln.
 #
 # Ein Aufruf = EINE QEMU-Variante. Drei Laeufe laut Vorgabe:
 #   1. ohne KVM (TCG):          LX_B4B_ACCEL=tcg  LX_B4B_INTREMAP=on  LX_B4B_EIM=off

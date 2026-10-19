@@ -26,13 +26,13 @@ From this follows the order that arranges everything else: **first the confineme
 proof.** A Linux driver in an IOMMU-bounded PD already carries the promise today; a
 proof about it will never exist.
 
-The elaboration with measured values is in `TODO0.md` (strand plan graphics/userland) and in
+The elaboration with measured values is in `TODO.md` (strand plan graphics/userland) and in
 `~/Dokumente/Caprock OS/` (measurement series of 2026-08-17).
 
 ## LANGUAGE RULE — everything new is English (decided 2026-08-17)
 
 **All new content is written in English. This applies even when the surrounding file is German.**
-A new section inside `todo.md` is English. A new comment in a German-commented module is English.
+A new section inside `TODO.md` is English. A new comment in a German-commented module is English.
 The repository becomes bilingual **by date**, which it already is through its commit history —
 that is the intended outcome, not an accident.
 
@@ -65,19 +65,24 @@ again afterwards. If one suddenly passes, its guard went blind during the rename
 
 ### What has been translated, and what has not (updated 2026-10-19)
 
-On 2026-10-19 the owner decided to translate the **key documents** only. Translated, by hand
-against the German original and checked mechanically (digit runs, headings, table rows, code
-spans): `README.md`, `README-X86.md`, this file (including the trap register),
-`LICENSE-EXCEPTION.md`, `docs/00-overview.md`, `docs/grenze.md`, `docs/plan-betriebsbereit.md`,
-`docs/verification.md`, 20 of the 23 ADRs (all except 0012, 0014, 0015), `programs/libcaprock/README.md`
-and six `tools/lx_*.md` notes (in `tools/lx_schablonen.md` the machine-read contract table stays
-German on purpose, because `tools/lx_symbols.py` parses it).
+On 2026-10-19 the owner decided to translate the **key documents**, and in a second step the
+project's memory files. Translated, by hand against the German original and checked mechanically
+(digit runs, headings, table rows, code spans): `README.md`, `README-X86.md`, this file (including
+the trap register), `LICENSE-EXCEPTION.md`, `TODO.md`, `AGENTS.md`, `STATUS.md`,
+`docs/00-overview.md`, `docs/grenze.md`, `docs/plan-betriebsbereit.md`, `docs/verification.md`,
+20 of the 23 ADRs (all except 0012, 0014, 0015), `programs/libcaprock/README.md` and six
+`tools/lx_*.md` notes (in `tools/lx_schablonen.md` the machine-read contract table stays German on
+purpose, because `tools/lx_symbols.py` parses it).
 
-**Not translated:** `done.md`, `todo.md`, `TODO0.md`, `AGENTS.md`, `STATUS.md`, `docs/invariants.md`
-(partly English already), the other `docs/` files, the phase reports, the `Verification/` READMEs
-and the German comments in code. They are the project's memory; their precision is their value, and
-a translation yields usable English and a **blunter claim**. Where a translated document and its
-German origin (see git history) ever differ in strength, the German original is the reference.
+**`TODO.md` is the merge of the former `todo.md` (Part I) and `TODO0.md` (Part II). `done.md` was
+removed** — it was not translated, because it went away; it is in the git history (present up to and
+including commit `e9d7054`). Entries that say "see `done.md`" keep that wording on purpose.
+
+**Not translated:** `docs/invariants.md` (partly English already), `todo-A-ausfuehren.md`,
+`todo-B-verlaesslichkeit.md`, the other `docs/` files, the phase reports, the `Verification/` READMEs
+and the German comments in code. Their precision is their value, and a translation yields usable
+English and a **blunter claim**. Where a translated document and its German origin (see git history)
+ever differ in strength, the German original is the reference.
 
 Inside translated documents, code spans, identifiers, file names and quoted log or report lines
 were left as they were — they are grepped by name from tools, see the exception above. The only
@@ -92,13 +97,13 @@ This file is an entry aid, not a source. For everything of substance:
 
 | File | Contents |
 |---|---|
-| `todo.md` | **exclusively open items** — the source for "what is still to do" |
-| `done.md` | finished work |
+| `TODO.md` | **exclusively open items** — the source for "what is still to do". Part I (formerly `todo.md`) is the register, Part II (formerly `TODO0.md`) the Linux userland/graphics strand plan |
+| git history | finished work: `done.md` was removed on 2026-10-19, its last revision is in commit `e9d7054` |
 | `docs/invariants.md` | the load-bearing assurances, among them §2a–2e on DMA |
 | `docs/00-overview.md` | structure |
 | `README-X86.md` | x86 specifics |
 
-Do **not answer open items from memory**. Read `todo.md`.
+Do **not answer open items from memory**. Read `TODO.md`.
 
 ## Current state
 
@@ -147,7 +152,7 @@ Whoever had concluded "fixed" from "2300 green" would have taken 66 % chance for
 check. Blocked is **one** thread: the IPC client waits for a reply that never comes, because
 the server has left its `RECV`/`REPLY` loop (`IPC-Rolle-abgewiesen=false`). The reason
 for the exit fell to the floor until 2026-08-07 — an `if m.result != OK { break }` without storing it.
-Since then `IPC_SERVER_EXIT` holds it and the report prints it. Details in `todo.md` D0.
+Since then `IPC_SERVER_EXIT` holds it and the report prints it. Details in `TODO.md` D0.
 
 A caveat that belongs to the number: `pprobe` reports `SKIP` under KVM as a matter of principle
 (`CPUID.1:ECX[31]`) and does not judge in this series.
@@ -264,7 +269,7 @@ false.
 * **And the real cap is `NCAPS = 16`, not the budget.** `CAP_BUDGET_MAX` stood at 64; the
   local cspace of a PD is an array of 16 slots, and `install_cap` rejects above that, **without
   asking the budget**. The self-test found it on the day of introduction. For a
-  driver environment with thirty caps a variable cspace is needed — TODO0 K1c.
+  driver environment with thirty caps a variable cspace is needed — TODO.md Part II K1c.
 * **The badge has received its speak check**, prompted by the model-fidelity guard, which complained about
   the rework of 2026-08-25 by itself (`E0061`). On **every** delivery it is now
   checked that the badge of **its** sender stands in the receiver's frame — with two
@@ -287,7 +292,7 @@ false.
   delivered `ROOT_BADGE`, the line reported `zu-gross-abgewiesen=false` with a correct rejection) —
   stands in the register since A-2.1. And `dma_audit` reports `2` after a hot reload, because two caps
   hold the same region; it therefore stands as a **number** in the line and the more serious question as
-  `A3d` in `todo.md`.
+  `A3d` in `TODO.md`.
 * **Corrected:** the five late probes in `all_done()` **do not gate** — they are measured in the
   report, the gate is the suite. Measured, not inferred.
 
@@ -379,7 +384,7 @@ false.
   before anything is frozen at all. An error in the thaw path cannot structurally
   cause it. Common to both pictures is a window in **wall-clock time**, and the rig
   runs 16 guests of 4 vCPUs each on 20 cores -- 3.2-fold overbooking; the `cycles` window measured
-  a factor of 4.2. Stands as D13 in `todo.md`.
+  a factor of 4.2. Stands as D13 in `TODO.md`.
 * **Why nobody saw it earlier — and the number that belongs to it.** The 2300 clean runs
   of 2026-08-03 counted as "the old rate is excluded". At the true rate
   `0.99982²³⁰⁰ ≈ 66 %` — a null finding was the **most probable** outcome. The reliable
@@ -413,7 +418,7 @@ false.
   the rework against 6 in 2000 after, `P(>=6 of 9 in one series) = 0.254` one-sided.
   Thereby my hypothesis is also refuted ("the new state *parked* meets the reap path"
   cannot be right if the picture without this state occurs just as often).
-  Details in `todo.md` D15, logs in `docs/befunde/d15/`.
+  Details in `TODO.md` D15, logs in `docs/befunde/d15/`.
 * **The D0 rework produced a regression, and the kernel audit found it itself.**
   Audit code 7 reads "runnable and in no list" -- literally the state of a PARKED
   thread, which could not exist before the fix. Measured in the aarch64 series:
@@ -458,14 +463,14 @@ false.
   driver` left client **and** server hanging permanently), D10 (O(n²) in the timer interrupt,
   reachable via load balancing) — fixed and measured. **D11 open:** the 33rd sender at
   an endpoint hangs forever, `is_quiescent()` reports it as quiet, `audit` and
-  `purge_thread` do not see it. Details in `todo.md`.
+  `purge_thread` do not see it. Details in `TODO.md`.
   The pattern behind it is more important than the errors: **none was findable via the test suite.**
   The signature of the x86 suite has remained **byte-identical** across all three fixes
   (`e419003d625f`, 500 runs per state) — the suite never triggered any of them.
 * **D0 re-measured: 2300 runs, no deviation — and still not closed.** The old rate of
   0.5 % is excluded, 0.1 % is not. More important than the number: **nobody has fixed this
   hang.** It fell below the measurement threshold, was not repaired — and thus also no longer
-  debuggable. Details in `todo.md` D0.
+  debuggable. Details in `TODO.md` D0.
   In the process a hole in the checker was noticed: **every run compared only against the first run of its
   own stream** — five parallel streams, each with its own self-consistent signature, would have reported green
   five times. The cross-comparison is now part of the measurement.
@@ -780,7 +785,7 @@ All fixed. They stand here because the condition behind them continues to hold.
   show a pipeline ID.** And afterwards three distinguishable cases count: no pipeline
   (configuration not found), pipeline with `pending` jobs (no runner), green.
 * **A local file in `.git/info/exclude` looks versioned.** `CLAUDE.md` stood there. A
-  commit with the title "CLAUDE.md to the state of today" contained exclusively `todo.md`, and
+  commit with the title "CLAUDE.md to the state of today" contained exclusively `TODO.md`, and
   every change to it lay on exactly one disk. `.gitignore` is noticed when reading, `.git/info/exclude`
   is not — it is not versioned along and stands in no diff.
 * **A concurrency proof without tracked cells checks only the atomics.** Loom did not see a
@@ -1263,7 +1268,7 @@ All fixed. They stand here because the condition behind them continues to hold.
   the next plan to the wrong place.** `SYS_SPAWN` had stood completely in the ABI since 2026-08-17 —
   six named rejections, `ERR_INUSE`, D0 admission order — and until
   2026-08-26 had **no caller, no report line and no suite gate**: zero hits in the whole
-  tree outside its definition and a number anchor. `TODO0.md` meanwhile listed it as
+  tree outside its definition and a number anchor. `TODO.md` meanwhile listed it as
   *missing* ("the ABI has no `SPAWN`"), i.e. as something other than *unmeasured*. Both versions
   were wrong, and the second is the more dangerous: against "missing" one plans the build, against
   "unmeasured" the measurement. `grep` for the callers is cheaper than any conjecture — the same
@@ -1398,7 +1403,7 @@ A missing build directory is intentional, not a defect. The first build takes co
 **Strand A-5 is closed.** Two driver PDs, each with its device named in the manifest, and the
 separation between them is measured instead of claimed (A-5.4).
 
-Everything else in `todo.md` — read, do not guess. Two things that follow immediately:
+Everything else in `TODO.md` — read, do not guess. Two things that follow immediately:
 
 * **`CAP_IRQ` for drivers** needs an **IRTE allocation** — the interrupt remapping table stands
   at all "not present" since B-3.2, and that is intentional. Until then every driver polls. That is

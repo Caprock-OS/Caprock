@@ -184,7 +184,7 @@ pub fn schwelle() -> u64 {
 // heisst, eine 160-Zeilen-Funktion mit sorgfaeltig begruendeter Semantik umzubauen. Das ist eine
 // eigene Arbeit mit eigener Gegenprobe, keine Nebenwirkung dieser. Als Schuld sind sie **benannt,
 // datiert, gedeckelt und im Bericht sichtbar**; als stille Ausnahme waeren sie unauffindbar. Sie
-// stehen als C9a/C9c in `todo.md`.
+// stehen als C9a/C9c in `TODO.md`.
 //
 // **Jeder Posten hat seinen EIGENEN Deckel, und jeder ist eine Ratsche.** Ein gemeinsamer Deckel
 // waere eine Zahl fuer zwei Tatsachen -- der grosszuegigere deckte den anderen mit ab, und die
@@ -638,7 +638,7 @@ pub const MIND_BLOECKE: u64 = 256;
 ///    innerhalb dieses hier liegt. Der Wert haengt zudem **nicht** an [`caprock_hal::KONSOLENBLOCK`]
 ///    (bei 16 Byte wie bei 4 Byte rund 58 Mio.), ist also keine Bytekosten-Groesse. Ein Gatter auf
 ///    eine unerklaerte Zahl waere eine Zeile, die rot wird, ohne dass jemand weiss wofuer. Steht
-///    als offener Punkt in `todo.md`.
+///    als offener Punkt in `TODO.md`.
 /// 5. **KEINE RISSE** — die Aussage „nichts verwuerfelt". Ein Riss ist eine zerrissene Zeile,
 ///    und das ist kein theoretischer Schaden: die erste Fassung dieses Umbaus gab eine
 ///    Nachricht aus dem Trap-Kontext einfach roh aus, und in 8 Suitenlaeufen traf einer der

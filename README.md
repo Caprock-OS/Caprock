@@ -6,14 +6,15 @@ this branch (`arch/x86_64`, the only branch published upstream), x86_64 being th
 
 **Target picture:** the kernel is the **base system of a cloud server** — no hypervisor beneath it,
 no VM inside it. Isolation, time and resource management are done by the kernel itself. What follows
-from that and what is still missing is in [`todo.md`](todo.md) (section Z) and
+from that and what is still missing is in [`TODO.md`](TODO.md) (section Z) and
 [`docs/plan-betriebsbereit.md`](docs/plan-betriebsbereit.md).
 
 Goals: highly secure · high-performance · capability-based · deterministic · fully modular.
 
-> **Documentation language.** Everything new is written in English. Most of the existing
-> documentation (`todo.md`, `done.md`, `docs/`, comments in older modules) is still German and is
-> deliberately **not** retranslated — its precision is its value. See `CLAUDE.md` for the rule.
+> **Documentation language.** Everything new is written in English, and the key documents —
+> including `TODO.md`, `AGENTS.md` and `STATUS.md` — have been translated. Parts of `docs/`, the phase
+> reports and the comments in older modules are still German and are deliberately **not** retranslated
+> — their precision is their value. See `CLAUDE.md` for the rule.
 
 ## The long-term goal — and the claim it supports
 
@@ -78,7 +79,7 @@ Two isolation paths, deliberately kept apart:
 ## Status
 
 Numbers carry a date **and** a sample size; the authoritative, current record is `CLAUDE.md`,
-[`done.md`](done.md) and [`todo.md`](todo.md). As of 2026-08-26:
+`done.md` and [`TODO.md`](TODO.md). As of 2026-08-26:
 
 * **Both architectures** share one kernel core: capability system with derivation tree, preemptive
   scheduler, capability-guarded IPC, protection domains, hot-reload of a server component behind the
@@ -91,14 +92,14 @@ Numbers carry a date **and** a sample size; the authoritative, current record is
   A 50 000-run measurement after the D0 fix found 0 start-race hits (9 in 50 000 before) — with a
   stated caveat about load that is recorded in `CLAUDE.md`.
 * **aarch64:** SMMUv3/DMA hardening, 8 cores with MMU/W^X. 6 of 6 runs with identical signature on
-  2026-08-13; one rare open hang class (D13) is tracked in `todo.md`.
+  2026-08-13; one rare open hang class (D13) is tracked in `TODO.md`.
 * **Drivers outside the kernel:** virtio transport, block and network device as driver PDs
   (`crates/caprock-virtio`, `programs/hardware/virtio-blk`), two driver PDs at once, each with its
   device named in the manifest, replaceable at run time. Above the sector sits a storage stack that
   is entirely outside the kernel: GPT and FAT16 parsers (`forbid(unsafe_code)`, host-tested) and a
   file-system PD that reads and writes. The DMA path is measured end to end on x86 through VT-d,
   including negative cases (one device cannot reach another PD's DMA region).
-* **Cache partitioning between PDs** (`todo.md` A1): the LLC geometry is *measured* (CPUID leaf 4 /
+* **Cache partitioning between PDs** (`TODO.md` A1): the LLC geometry is *measured* (CPUID leaf 4 /
   CLIDR/CCSIDR), and two isolated PDs get disjoint colour sets — region, kernel stack and page
   tables. What this does **not** cover is in [`docs/invariants.md`](docs/invariants.md) §12; the main
   limit: no colour helps against sibling hyperthreads. Colouring only works on bare metal, not as a
@@ -119,7 +120,7 @@ Not hidden: **VT-d interrupt remapping** has no IRTE assignment yet (the table i
 device may go to a tenant. The device *offer* is still virtio-bound (the choice is in the manifest,
 the offer is not). The per-PD capability space is a fixed 16 slots (`NCAPS`), which is the real cap
 on a capability budget. Migration across server boundaries is design, not code. The full list is in
-[`todo.md`](todo.md).
+[`TODO.md`](TODO.md).
 
 ## Building without the test infrastructure
 
@@ -148,10 +149,10 @@ initial distribution of authority and is therefore signed and bound to the kerne
 
 ## Documentation
 
-- [`todo.md`](todo.md) — open items only; **section Z: the target architecture** everything is
+- [`TODO.md`](TODO.md) — open items only; **section Z: the target architecture** everything is
   measured against
 - [`docs/plan-betriebsbereit.md`](docs/plan-betriebsbereit.md) — order of work and reasons
-- [`done.md`](done.md) — finished work *with the assumptions that turned out to be wrong*
+- git history — finished work *with the assumptions that turned out to be wrong*: `done.md` was removed on 2026-10-19, its last revision is in commit `e9d7054`
 - [`docs/invariants.md`](docs/invariants.md) — the load-bearing guarantees **and their limits**
 - [`docs/00-overview.md`](docs/00-overview.md) — structure, crate layout, trust model
 - [`docs/adr/`](docs/adr/) — architecture decisions

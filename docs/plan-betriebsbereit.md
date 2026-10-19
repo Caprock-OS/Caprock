@@ -3,7 +3,7 @@
 As of 2026-07-29. The plan for how today's kernel becomes a base system for cloud servers —
 no hypervisor beneath it, no VM inside it, isolation and time management by the kernel itself.
 
-The items themselves are in [todo.md](../todo.md); what is here is the **order and why it is
+The items themselves are in [TODO.md](../TODO.md); what is here is the **order and why it is
 so**. What is not here is the effort in person-days: the estimates would be guessed, and
 guessed numbers are later read as promises.
 

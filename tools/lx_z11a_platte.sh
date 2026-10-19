@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # **Z11a, zweite Haelfte (Werkzeugseite): Treiber von der Platte — gebaut, nicht behauptet.**
 #
-# Stand in `todo.md` Z11a: der Bootloader-Weg ist belegt (`tools/mkgrubiso.sh`), der
+# Stand in `TODO.md` Z11a: der Bootloader-Weg ist belegt (`tools/mkgrubiso.sh`), der
 # Plattentreiber laeuft als geladenes Userland-Programm — was fehlt, ist alles darueber:
 # Partitionstabelle, Dateisystem, Manifest-Eintrag. Dieses Werkzeug baut genau das, aus den
 # vorhandenen Teilen, ohne einen einzigen neuen Parser:

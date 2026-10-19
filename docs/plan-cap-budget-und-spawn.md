@@ -28,20 +28,20 @@ against the tree at the time of writing; the numbers are from this branch, not f
 > budget**. The self-test caught it on the day the ceiling was introduced. `CAP_BUDGET_MAX` is now
 > `NCAPS` with a `const assert`, and **`NCAPS` is the real limit on a driver PD** — the account
 > raises the reachable number from 8 to 16 at no cost to the other ten thousand PDs, and going
-> past 16 needs a variable Cspace (TODO0 K1c), which this plan explicitly put out of scope.
+> past 16 needs a variable Cspace (TODO.md Part II K1c), which this plan explicitly put out of scope.
 >
 > Smaller deltas: the order was kept (Change 2 first, and it was right — the multi-thread PD is
 > what Change 1's measurement stands on). The budget request rides on `SYS_LOAD` `MSG3` as planned.
 > The `vorrat-erschoepft-abgewiesen` conjunct is **not** measured: triggering it needs ~80 000
 > slots, i.e. thousands of PDs, which would move every other baseline in the run. What is measured
 > instead is that the two refusal reasons are counted **separately** — over-max does not increment
-> the pool counter. The gap is named in `todo.md` A3.
+> the pool counter. The gap is named in `TODO.md` A3.
 
 ---
 
 ## Why these two, and why together
 
-The binding constraint on a Linux driver environment (LKL-style, see `TODO0.md` L1) is **not** the
+The binding constraint on a Linux driver environment (LKL-style, see `TODO.md` L1) is **not** the
 Linux API — it is the capability budget:
 
 * `CAP_BUDGET_PER_PD = 8` (`crates/caprock-microkit/src/lib.rs`), enforced by `budget_allows`,

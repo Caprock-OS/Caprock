@@ -7,7 +7,7 @@ WARUM ES DAS GIBT
 
 Z28 entscheidet, dass das Syscall-ABI ein Userland-Begriff wird: ein Handler-Modul bearbeitet die
 Syscalls eines Gastes, und die Bedingung fuer seine Zulassung ist **Eingeschlossenheit**, nicht
-Korrektheit. Der Grund steht in `todo.md` Z28 und ist im Projekt schon zweimal bezahlt worden:
+Korrektheit. Der Grund steht in `TODO.md` Z28 und ist im Projekt schon zweimal bezahlt worden:
 `caprock-part` und `caprock-fat` sind abhaengigkeitsfrei und `forbid(unsafe_code)`, damit fremde
 Plattenbytes nirgends mit Kernprivileg interpretiert werden. Ein falsch gelesener FAT-Eintrag
 liefert Unsinn; er wird nicht zu Codeausfuehrung.

@@ -476,7 +476,7 @@ fn budgettest() {
     // bei ERSCHOEPFTEM Vorrat. Sie auszuloesen hiesse rund 80 000 Slots zu vergeben, also
     // tausende PDs -- eine Messung, die die Baseline jedes anderen Tests dieses Laufs verschoebe.
     // Gemessen ist stattdessen, dass die beiden Gruende UNTERSCHEIDBAR gezaehlt werden; der
-    // Erschoepfungspfad selbst steht als offen in `todo.md`.
+    // Erschoepfungspfad selbst steht als offen in `TODO.md`.
     println!(
         "budget  : {} (Vorrat {vorrat_start} -> {vorrat0} -> {vorrat1} -> {vorrat2}, Vorratsabsagen {abgewiesen1}; \
          der ERSCHOEPFUNGSPFAD ist NICHT gefahren -- s. todo)",

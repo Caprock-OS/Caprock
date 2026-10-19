@@ -4,7 +4,7 @@
 tauscht man ihn im Betrieb aus, ohne dass IPC-Beziehungen reißen?
 
 Gegenstück: [todo-B-verlaesslichkeit.md](todo-B-verlaesslichkeit.md). Gemeinsame Grundlage:
-[todo.md](todo.md) (Abschnitt Z) und [docs/plan-betriebsbereit.md](docs/plan-betriebsbereit.md).
+[TODO.md](TODO.md) (Abschnitt Z) und [docs/plan-betriebsbereit.md](docs/plan-betriebsbereit.md).
 Koordinationsregeln am Ende dieser Datei — **vor der ersten Änderung lesen.**
 
 Dieser Strang ist der **kritische Pfad**. Solange er nicht steht, hat der Kernel keinen
@@ -173,7 +173,7 @@ Für einen Betriebsanspruch fehlen drei Dinge.
       alten Server. Entweder der neue erbt die offenen Replys, oder der Austausch findet nur ohne
       offene Transaktion statt. Die zweite Variante ist ehrlich und für den Anfang wahrscheinlich
       richtig — sie braucht aber einen Begriff von „ruhend", den es heute nicht gibt.
-      **Derselbe Begriff trägt später [Z4a](todo.md#z4-checkpointrestore-eines-threads)
+      **Derselbe Begriff trägt später [Z4a](TODO.md#z4-checkpointrestore-of-a-thread)
       (Thread einfrieren).** Einmal bauen, zweimal benutzen — und deshalb hier gleich allgemein
       genug entwerfen.
 - [x] **A-4.3 erledigt (2026-07-31).** Gewählt ist die **Region, die den Austausch überlebt** —
@@ -232,7 +232,7 @@ Für einen Betriebsanspruch fehlen drei Dinge.
 - [x] **A-5.1 erledigt (2026-08-02).** Ein Treiber laeuft als **Dienst** ausserhalb des Kerns,
       und der Kernel kann ihn **austauschen**, ohne zu wissen, was er treibt. Details, Messwerte
       und die Fehler, die dabei sichtbar wurden, in
-      [done.md](done.md#a-51-der-treiber-als-dienst-und-sein-austausch).
+      done.md.
 
       **Gemessen (Lade-Suite):**
 
@@ -270,7 +270,7 @@ Für einen Betriebsanspruch fehlen drei Dinge.
 
 - [x] **A-5.2 erledigt (2026-08-01).** virtio auf x86: Transport, **Blockgerät und Netzkarte**.
       Details, Messwerte und die Annahme, die dabei umfiel, in
-      [done.md](done.md#a-52-virtio-auf-x86--transport-blockgerät-netzkarte).
+      done.md.
 
       Kurzfassung: `rng` belegte den Transport, aber nur **eine** Richtung — das Gerät schreibt in
       unseren Speicher, es liest nie etwas von uns. `blk` schließt die Lücke mit einer
@@ -296,7 +296,7 @@ Kernel"*). Der Kern bekommt davon nichts: die Parser sind abhaengigkeitsfreie Cr
 - [x] **A-6.1 erledigt (2026-08-02): das Dienstprotokoll ueber dem Treiber.**
       `OP_INFO` (Kapazitaet, Hoechstzahl je Anfrage, Sektorgroesse), `OP_READ`, `OP_WRITE`,
       `OP_FLUSH`, und ein eigener Status **Bereich** fuer Sektoren jenseits der Platte.
-      Details in [done.md](done.md#a-61-das-dienstprotokoll-ueber-dem-treiber).
+      Details in done.md.
 
       **Gemessen:** `INFO Kapazitaet=2048 Sektorgroesse=512; READ(0)=0 WRITE(100)=0 FLUSH=0;
       Rueckgelesen=0x454b414c344c4553; READ(jenseits der Platte)=3`.
@@ -309,7 +309,7 @@ Kernel"*). Der Kern bekommt davon nichts: die Parser sind abhaengigkeitsfreie Cr
 - [x] **A-6.2 erledigt (2026-08-02): die Partitionstabelle.** `crates/caprock-part` —
       GPT-Parser, `#![no_std]`, `forbid(unsafe_code)`, **keine Abhaengigkeiten**, **14 von 14**
       Host-Tests. Gelesen wird sie im **Blockdienst**, nicht im Kern.
-      Details in [done.md](done.md#a-62-die-partitionstabelle--im-dienst-gelesen-nicht-im-kern).
+      Details in done.md.
 
       **Gemessen:** `GPT-Scan Status=0 belegte Eintraege=2; erste Partition LBA 34 ueber 967
       Sektoren`. Gegenprobe mit drei kaputten Tabellen: Signatur, Kopf-CRC, Eintrags-CRC — alle
@@ -330,7 +330,7 @@ Kernel"*). Der Kern bekommt davon nichts: die Parser sind abhaengigkeitsfreie Cr
 
 - [x] **A-6.3 erledigt (2026-08-02): ein lesendes Dateisystem als eigene PD.**
       `crates/caprock-fat` (FAT16, **16 von 16** Host-Tests) + `programs/trusted/fs`.
-      Details in [done.md](done.md#a-63-ein-lesendes-dateisystem-als-eigene-pd).
+      Details in done.md.
 
       **Gemessen:** `fs : Status=0; Groesse=20 erste acht Byte=0x454b414c344c4553 Cluster=1` —
       die Datei wurde nicht bloss gefunden, sondern **gelesen**, ueber GPT → FAT16 → Blockdienst →
@@ -349,7 +349,7 @@ Kernel"*). Der Kern bekommt davon nichts: die Parser sind abhaengigkeitsfreie Cr
 
 - [x] **A-6.4 erledigt (2026-08-02): Schreiben.** Die Dateisystem-PD verlaengert eine Datei ueber
       einen zweiten Cluster hinaus, schreibt die Kette in **alle** FAT-Kopien, flusht und liest
-      **jedes Byte** zurueck. Details in [done.md](done.md#a-64-schreiben--und-der-zweite-melder).
+      **jedes Byte** zurueck. Details in done.md.
 
       **Gemessen:** `Schreiben Status=0; Rueckgelesen Status=0 Groesse=700 geprueft=700 Byte`, und
       unabhaengig davon am Abbild: `OK: HELLO.TXT, 700 Byte, 2 Cluster, 2 FAT-Kopien gleich`.
@@ -365,7 +365,7 @@ Kernel"*). Der Kern bekommt davon nichts: die Parser sind abhaengigkeitsfreie Cr
       davon stillschweigend weggelassen.
 
 - [x] **A-5.3 erledigt (2026-08-02): das Manifest sagt, WELCHES Gerät — nicht die Fundreihenfolge.**
-      Details in [done.md](done.md#a-53-die-zuteilung-stand-im-enumerator-nicht-im-manifest).
+      Details in done.md.
 
       Die Vorbedingung war erfüllt: Interrupt Remapping steht seit B-3.2 (aktiv, CFI abgeschaltet).
 
@@ -386,7 +386,7 @@ Kernel"*). Der Kern bekommt davon nichts: die Parser sind abhaengigkeitsfreie Cr
 
 - [x] **A-5.4 erledigt (2026-08-02): zwei Treiber-PDs, und das Gerät der einen erreicht die
       DMA-Region der anderen nicht.** Details in
-      [done.md](done.md#a-54-teil-2-das-geraet-des-einen-treibers-erreicht-die-region-des-anderen-nicht).
+      done.md.
 
       **Teil 1** — `programs/hardware/virtio-net` ist der zweite Treiber, beide bekommen ihr im
       Manifest **benanntes** Gerät (`devsel : ALL PASS`, je Eintrag geprüft), der Client benennt
@@ -419,7 +419,7 @@ sich vorher.
 * **Strang B besitzt:** `crates/caprock-sync/`, `crates/caprock-mem/`, `crates/caprock-hal/`,
   `kernel/src/colors.rs`, `kernel/src/dmatests.rs`, `test-qemu*.sh`, `build*.sh`, `docs/`.
 * **Geteilt, deshalb mit Ansage:** `kernel/src/system.rs`, `kernel/src/arch/x86_64/bringup.rs`,
-  `kernel/src/main.rs`, `docs/invariants.md`, `todo.md`.
+  `kernel/src/main.rs`, `docs/invariants.md`, `TODO.md`.
   In `system.rs` gilt grob: A ändert Syscall-/Cap-/Loader-Pfade, B die Speicher-, Farb- und
   Telemetriepfade.
 

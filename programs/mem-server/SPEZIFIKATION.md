@@ -9,7 +9,7 @@ entscheidet, was Stufe 2 darauf baut. **Kein Engine-Bau.**
 
 ## Die Entscheidung: WASM zuerst, musl bedingt, Kompat-Lib punktuell
 
-Drei Wege (todo.md Z14 Stufe 2 / Z15, hier nur angewandt, nicht neu bewertet):
+Drei Wege (TODO.md Z14 Stufe 2 / Z15, hier nur angewandt, nicht neu bewertet):
 
 | Weg | TCB | Reichweite | Preis |
 |---|---|---|---|

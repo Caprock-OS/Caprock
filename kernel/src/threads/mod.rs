@@ -6024,7 +6024,7 @@ fn report() {
     //
     // Dieselbe Zeile druckt der x86-Hochlauf. Bis hierher berichtete jede Architektur in ihren
     // eigenen Worten (`smmu` gegen `iommu`/`vtdcaps`), und zwei Formulierungen derselben
-    // Eigenschaft sind zwei Entwuerfe -- `todo.md` hatte genau das vorab als Warnsignal benannt.
+    // Eigenschaft sind zwei Entwuerfe -- `TODO.md` hatte genau das vorab als Warnsignal benannt.
     //
     // Der Round-Trip wird HEREINGEREICHT: `CMD_SYNC` braucht die Physadresse der Command-Queue
     // und den Producer-Index, und die gehoeren dem `DmaEnforcer`, nicht der HAL. Es gibt genau

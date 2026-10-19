@@ -75,7 +75,7 @@
 //! Die beiden Neins sind **kein Versehen und keine Sparsamkeit**: sie sind eigene Caps mit eigenen
 //! Entwurfsfragen (welche Cap trägt „der ganze Adressraum von G"? ein Kernel-Kopierdienst kostet
 //! TCB je Syscall). Sie hier mitzunehmen hiesse, drei Entscheidungen in einer Zeile zu treffen —
-//! dieselbe Form wie ein Wert mit zwei Bedeutungen. Sie stehen als offener Punkt in `todo.md`.
+//! dieselbe Form wie ein Wert mit zwei Bedeutungen. Sie stehen als offener Punkt in `TODO.md`.
 //!
 //! ## Der Adressraumwechsel ist eine OFFENE GRÖSSE, kein Nebensatz
 //!
@@ -94,9 +94,9 @@
 //!
 //! Der Preis ist damit benannt und **nicht gemessen**: zwei Adressraumwechsel je Umlauf, auf x86
 //! ohne PCID also zweimal ein vollständig geleerter TLB (Z18 (3)). Die Schwelle, ab der die
-//! cap-förmige Fassung fällt, steht in `todo.md` Z26/A3 — **vor** der Messung.
+//! cap-förmige Fassung fällt, steht in `TODO.md` Z26/A3 — **vor** der Messung.
 //!
-//! [Z26]: ../../../todo.md
+//! [Z26]: ../../../TODO.md
 
 #![allow(clippy::needless_range_loop)]
 

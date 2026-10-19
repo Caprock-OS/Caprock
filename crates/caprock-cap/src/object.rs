@@ -157,7 +157,7 @@ pub enum ObjectKind {
     ///
     /// **Was sie NICHT gewährt:** einen Fault zu *beheben* heisst, Mappings im **Gast-Vspace** zu
     /// installieren. Das ist eine dritte Autorität, sie kommt in diesem Primitiv nicht vor, und
-    /// ohne sie ist `mmap` nicht implementierbar (s. `todo.md` Z26/A3, „was offen bleibt").
+    /// ohne sie ist `mmap` nicht implementierbar (s. `TODO.md` Z26/A3, „was offen bleibt").
     FaultHandler {
         ep: u32,
         pd: u16,

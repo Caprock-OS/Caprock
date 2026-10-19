@@ -360,7 +360,7 @@ Male plant man am Falschen vorbei. `grep` nach den Aufrufern entscheidet es in e
 | TLS | **gemessen** 2026-08-27 — `SYS_SETTLS`, `Tcb.tls`, `sync_thread_state`, `PT_TLS` + `.tdata`/`.tbss`, `libcaprock::tls_einrichten`. Zeile `tls` auf **beiden** Architekturen, vier Gegenproben. Ein Treiber laeuft mit `#[thread_local]`. Der Kernel haelt **ein Register**, das Layout (Variante 1 gegen 2) lebt im Userspace |
 | Präemptions-Gatter je Thread | **fehlt** — folgt aus E3 (entschieden 2026-08-26); die Entscheidung steht, die Umsetzung nicht |
 | SPAWN mit Offset | **gemessen** 2026-08-26 — `x1 = (offset_pages << 32) \| len_pages`, Zeile `arena`, beide Architekturen |
-| Cap-Slots je PD | **16, hart** (`NCAPS`) — das Budget ist seit 2026-08-26 ein Konto je PD, aber der lokale Cspace ist ein Array fester Länge. Für dreissig Caps braucht es einen variablen Cspace, s. TODO0 K1c |
+| Cap-Slots je PD | **16, hart** (`NCAPS`) — das Budget ist seit 2026-08-26 ein Konto je PD, aber der lokale Cspace ist ein Array fester Länge. Für dreissig Caps braucht es einen variablen Cspace, s. TODO.md Part II K1c |
 | Mehrere Caps beim Laden | **gemessen** 2026-08-25 — `SYS_LOAD` nimmt 8 `(Quell,Ziel)`-Paare in einem Wort |
 | DMA-Pool, Größe zur Ladezeit | **gemessen** 2026-08-26 — `SYS_LOAD` `x5`, Zeile `dmapool` |
 
@@ -468,7 +468,7 @@ Die Größen dürfen nicht aus dem Manifest kommen — das beschreibt nur den Bo
 
 *Gemessen* als `dmapool`: zwei Treiber-PDs mit 8 bzw. 32 Seiten, `eingeloest` (jede bekam genau das Angeforderte — der Wunsch wird **neben** der Gewährung geführt, sonst wären „so gewollt" und „gekürzt" nicht unterscheidbar), `verschieden`, IOVA-Fenster `disjunkt` (A-5.4 bei geänderten Größen **neu** gefahren), und der Ring-3-Negativfall aus `init`.
 
-> **Eine Abweichung von der Vorregistrierung, und sie ist ein Befund:** `dma_audit == 0` steht hier als Bedingung. Am Ende eines Laufs mit A-5.1-Hot-Reload meldet es **2** — `reassign_driver_device` prägt der neuen Treiberfassung absichtlich eine Cap über **dieselbe** Region, und die Regel „verschiedene Objekte dürfen sich nie überlappen" kennt die *Übergabe* nicht. Es ist deshalb **kein** Konjunkt der Zeile, sondern eine Zahl darin. Die ernstere Frage dahinter — was beim Abbau der alten PD mit der Region passiert, auf der die neue läuft — steht als `A3d` in `todo.md`.
+> **Eine Abweichung von der Vorregistrierung, und sie ist ein Befund:** `dma_audit == 0` steht hier als Bedingung. Am Ende eines Laufs mit A-5.1-Hot-Reload meldet es **2** — `reassign_driver_device` prägt der neuen Treiberfassung absichtlich eine Cap über **dieselbe** Region, und die Regel „verschiedene Objekte dürfen sich nie überlappen" kennt die *Übergabe* nicht. Es ist deshalb **kein** Konjunkt der Zeile, sondern eine Zahl darin. Die ernstere Frage dahinter — was beim Abbau der alten PD mit der Region passiert, auf der die neue läuft — steht als `A3d` in `TODO.md`.
 
 ### TLS
 

@@ -3,7 +3,7 @@
 **Frage, die dieser Strang beantwortet:** Kann man dem Kernel glauben, was er zusichert — und
 trägt die Isolation für fremde Tenants?
 
-Gegenstück: [todo-A-ausfuehren.md](todo-A-ausfuehren.md). Gemeinsame Grundlage: [todo.md](todo.md)
+Gegenstück: [todo-A-ausfuehren.md](todo-A-ausfuehren.md). Gemeinsame Grundlage: [TODO.md](TODO.md)
 (Abschnitt Z) und [docs/plan-betriebsbereit.md](docs/plan-betriebsbereit.md). Die
 Koordinationsregeln stehen am Ende von Strang A und gelten für beide.
 
@@ -167,7 +167,7 @@ Verlässliches.
       hängt daran).
 - [x] **B-3.3 erledigt (2026-08-02).** Die Notiz war zur Hälfte veraltet — und die andere Hälfte
       war schlimmer als beschrieben. Details in
-      [done.md](done.md#b-33-mehr-einheiten-aggregation--die-haelfte-die-schlimmer-war).
+      done.md.
 
       Schon aggregiert waren `caps_common()`, die Fault-Zähler und `discover`. **Nicht**
       aggregiert waren drei Stellen mit Zähnen: `init()` stellte **nur Einheit 0** scharf (die
@@ -236,7 +236,7 @@ Verlässliches.
       arch-neutral, Meldung `pprobe`, seit 2026-08-02 von `test-qemu-x86.sh` auch **geprüft**).
       Was fehlt, ist **Blech** — und der Eintrag sagt jetzt, was für eine Maschine das sein muss.
       **Die Reproduzierbarkeits-Nebenbedingung ist erledigt (2026-08-02).** Details in
-      [done.md](done.md#b-45-teil-2-der-primeprobe-war-nicht-reproduzierbar--und-die-ursache-war-nicht-der-allokator).
+      done.md.
       Kurz, weil die alte Notiz die Ursache falsch benannte:
       * **Der Allokator war es nicht.** Der Aufbau war byte-identisch reproduzierbar (gleiche
         Physadressen, gleiche Fragmentzahl davor/danach), der Fragment-Höchststand lag bei **419
@@ -289,7 +289,7 @@ Verlässliches.
 ## B-5. Zeit, Abrechnung, Speicherorte (Z2, Z5, Z8)
 
 - [x] **B-5.1 erledigt (2026-08-02).** Der Verbrauch wird bei **jeder Umplanung** gestempelt, nicht
-      mehr beim Tick. Details in [done.md](done.md#b-51-die-abrechnung-hing-am-tick).
+      mehr beim Tick. Details in done.md.
 
       Der Zustand vorher war schlimmer als die Notiz vermutete: `on_tick` belastete nur bei
       `tick == true`, `block_current`/`switch_to`/`YIELD` **gar nicht**. Die Verzerrung war damit
@@ -323,7 +323,7 @@ Verlässliches.
       kämpfen beide Politiken um dieselbe Physadresse und wer zuerst zuteilt, gewinnt.
 - [x] **B-5.5 erledigt (2026-08-02).** Die CDT-Läufe sind begrenzt — und der Befund dabei war,
       dass es **ausgerechnet umgekehrt** stand. Details in
-      [done.md](done.md#b-55-der-prüfer-war-begrenzt-revoke-nicht).
+      done.md.
 
       `audit_cdt` war gegen einen zyklischen CDT geschützt (`steps > nslots`), `revoke`,
       `move_cap` und `child_count` **nicht**. Der Prüfer läuft auf Anforderung, `revoke` auf
@@ -352,7 +352,7 @@ Verlässliches.
 - [x] **B-6.2 erledigt (2026-08-02) — und die Prämisse des Eintrags war falsch.** Die Festlegung
       steht in [docs/fehlerdomaene.md](docs/fehlerdomaene.md) (betreiberseitig, mit Messvorschrift
       und Nicht-Zusicherungen), als Invariante §14 in [docs/invariants.md](docs/invariants.md).
-      Details in [done.md](done.md#b-62-die-fehlerdomaene--und-ein-panic-der-nicht-den-knoten-reisst-sondern-verschluckt-wird).
+      Details in done.md.
 
       **Zugesichert:** der Knoten ist die Fehlerdomäne; Redundanz über Knoten. Zusätzlich: alle PDs
       im **globalen SAS-Adressraum** (`VSPACE_OF == 0`) bilden untereinander **eine** Domäne —
@@ -385,7 +385,7 @@ Verlässliches.
 ## B-7. Verifikation (D1–D5)
 
 - [x] **B-7.1 erledigt (2026-08-02) — die Notiz war überholt, die Lücke lag woanders.**
-      Details in [done.md](done.md#b-71-die-notiz-war-überholt--die-lücke-lag-woanders).
+      Details in done.md.
 
       `tools/kani-verify.sh` hatte `sync` längst als Ziel, und die CI ruft es **ohne Argumente**,
       also mit allen vier Zielen. Woher die Notiz kam, ist trotzdem sichtbar: der CI-Job hiess
@@ -414,7 +414,7 @@ Verlässliches.
       `crates/caprock-sync/src/lib.rs` **unverändert**, die Beweise stehen in derselben Datei.
       `Verification/concurrency/loom/src/{lib,ticket}.rs` sind **gelöscht** — eine tote Kopie, die
       autoritativ aussieht, ist schlimmer als keine. Details in
-      [done.md](done.md#b-72-loom-prüfte-eine-kopie--und-die-kopie-war-nicht-das-problem).
+      done.md.
 
       **Der Fund, der zählt:** eine abgeschwächte Speicherordnung im Ticket-Release
       (`Release` → `Relaxed`) lief durch **alle** Beweise. Ursache war nicht die Kopie, sondern
