@@ -1,53 +1,53 @@
-# Caprock — Formale Verifikation (Tier 1: Kani, Tier 2: Verus-Pilot)
+# Caprock — Formal verification (tier 1: Kani, tier 2: Verus pilot)
 
-Dieses Dokument beschreibt die **dauerhafte Verifikationspipeline** von Caprock. Strategie-Analyse
-(Stufenmodell Tier 1–3, seL4-Vergleich, Tool-Landschaft): `ARMTest/formale-verifikation-aufwand.md`.
+This document describes Caprock's **permanent verification pipeline**. Strategy analysis
+(tier model 1–3, seL4 comparison, tool landscape): `ARMTest/formale-verifikation-aufwand.md`.
 
-## Stufenmodell (Kurzfassung)
+## Tier model (short version)
 
-- **Tier 0 (vorhanden):** safe-Rust-Kern (by-compiler speichersicher), `forbid(unsafe_code)`-Parser,
-  10 Laufzeit-Audits, Fuzzer, `docs/invariants.md`.
-- **Tier 1 (HIER, aktiv):** **Kani** (bounded Model Checking, CBMC) beweist Panik-/OOB-/Overflow-
-  Freiheit + Struktur-Invarianten der klar abgegrenzten, sicherheitskritischen Komponenten.
-- **Tier 2 (Pilot aktiv):** **Verus** — deduktive funktionale Korrektheit (Audits werden zur Spec).
-  Erster kleiner Pilot umgesetzt (s. u.).
-- **Tier 3 (Forschung):** volle Korrektheit + Isolation/Info-Flow + HW-Modell.
+- **Tier 0 (present):** safe-Rust core (memory safe by compiler), `forbid(unsafe_code)` parsers,
+  10 run-time audits, fuzzers, `docs/invariants.md`.
+- **Tier 1 (HERE, active):** **Kani** (bounded model checking, CBMC) proves freedom from panic/OOB/overflow
+  + structure invariants of the clearly delimited, security-critical components.
+- **Tier 2 (pilot active):** **Verus** — deductive functional correctness (audits become the spec).
+  First small pilot implemented (see below).
+- **Tier 3 (research):** full correctness + isolation/information flow + HW model.
 
-## Tier 1 — was bewiesen ist
+## Tier 1 — what is proved
 
-| Komponente | Harness | Aussage |
+| Component | Harness | Statement |
 |---|---|---|
-| `caprock-loader/cert.rs` | `parse_never_panics` | `TrustedCert::parse` paniert/OOBt/überläuft **nie** (beliebige Eingabe) |
-| | `parse_partitions_input` | bei Erfolg: `message()+signature()` partitionieren die Eingabe exakt, Sig nicht leer, `len==152+build_info` |
-| `caprock-loader/archive.rs` | `parse_never_panics` | `Archive::parse` (+ `program(i)`) panik-/OOB-frei |
-| `caprock-loader/elf.rs` | `parse_never_panics` | `ElfImage::parse` panik-/OOB-/overflow-frei |
-| | `segments_are_sound` | bei Erfolg: jedes Segment `memsz>=filesz`, `segment_bytes().len()==filesz`, `offset+filesz<=len` |
-| `caprock-region/lib.rs` | `split_at_partitions` | `split_at` partitioniert exakt + lückenlos + nicht-überlappend, overflow-/underflow-frei |
-| | `subview_within_parent` | `subview` liegt vollständig in der Eltern-Region (`off+sublen<=len`, kein Escape) |
-| | `get_set_never_oob` | rohe `get`/`set` greifen (über echten Puffer) nie ausserhalb der Region zu |
-| | `copy_fill_never_oob` | rohe `copy_from`/`copy_to`/`fill` bounds-respektierend (kein OOB) |
-| `caprock-sync/lib.rs` | `spinlock_roundtrip` | `SpinLock`: Guard-Deref memory-safe, Lock/Unlock-Round-Trip (`next==serving`), Daten-Persistenz |
-| | `rwlock_write_then_read` | `RwSpinLock`: write→read sieht den Wert; nach allen Drops Zustand `0` |
-| | `rwlock_state_arithmetic` | Reader-Count + Writer-Bit over-/underflow-frei; Writer-Drop löscht **nur** das WRITER-Bit |
+| `caprock-loader/cert.rs` | `parse_never_panics` | `TrustedCert::parse` **never** panics/goes OOB/overflows (arbitrary input) |
+| | `parse_partitions_input` | on success: `message()+signature()` partition the input exactly, sig not empty, `len==152+build_info` |
+| `caprock-loader/archive.rs` | `parse_never_panics` | `Archive::parse` (+ `program(i)`) panic/OOB-free |
+| `caprock-loader/elf.rs` | `parse_never_panics` | `ElfImage::parse` panic/OOB/overflow-free |
+| | `segments_are_sound` | on success: every segment `memsz>=filesz`, `segment_bytes().len()==filesz`, `offset+filesz<=len` |
+| `caprock-region/lib.rs` | `split_at_partitions` | `split_at` partitions exactly + gaplessly + non-overlappingly, overflow/underflow-free |
+| | `subview_within_parent` | `subview` lies entirely within the parent region (`off+sublen<=len`, no escape) |
+| | `get_set_never_oob` | raw `get`/`set` (over a real buffer) never access outside the region |
+| | `copy_fill_never_oob` | raw `copy_from`/`copy_to`/`fill` respect bounds (no OOB) |
+| `caprock-sync/lib.rs` | `spinlock_roundtrip` | `SpinLock`: guard deref memory-safe, lock/unlock round trip (`next==serving`), data persistence |
+| | `rwlock_write_then_read` | `RwSpinLock`: write→read sees the value; after all drops state `0` |
+| | `rwlock_state_arithmetic` | reader count + writer bit over/underflow-free; writer drop clears **only** the WRITER bit |
 
-> **Reichweite bei `caprock-sync`:** Kani ist ein **single-threaded** Modellprüfer, **kein**
-> Nebenläufigkeits-Checker. Bewiesen sind Memory-Safety der Guards, Single-Thread-Round-Trips +
-> Daten-Persistenz und die Zähler-**Arithmetik**. Der **gegenseitige Ausschluss unter gleichzeitigem
-> Mehrkern-Zugriff** (Interleavings) liegt **außerhalb** Kanis Reichweite — dafür wäre ein
-> Concurrency-Modellprüfer nötig. Loom Stufe 2 existiert seit `c2116ac` — **deckt aber die
-> IRQ-Maskierung nicht ab**, und genau dort lag der Fehler vom 2026-07-29 (s. `invariants.md` §1a):
-> auf x86 war `irq_save_disable` ein No-Op, weil der Host-Zweig das Kernel-Ziel mitfing. Loom
-> modelliert eine **Kopie** des Algorithmus; ein Fehler in der `cfg`-**Auswahl** ist für jedes
-> Modell unsichtbar, weil das Modell den ausgewählten Code gar nicht sieht. Wirksam war stattdessen
-> eine Zusicherung über die Auswahl selbst (`IRQ_MASKING_IMPLEMENTED`, Übersetzungszeit).
+> **Reach for `caprock-sync`:** Kani is a **single-threaded** model checker, **not** a
+> concurrency checker. Proved are memory safety of the guards, single-thread round trips +
+> data persistence and the counter **arithmetic**. **Mutual exclusion under simultaneous
+> multi-core access** (interleavings) lies **outside** Kani's reach — a
+> concurrency model checker would be needed for that. Loom stage 2 has existed since `c2116ac` — **but does not cover
+> the IRQ masking**, and precisely there lay the error of 2026-07-29 (see `invariants.md` §1a):
+> on x86 `irq_save_disable` was a no-op, because the host branch also swept in the kernel target. Loom
+> models a **copy** of the algorithm; an error in the `cfg` **selection** is invisible to every
+> model, because the model does not even see the selected code. What was effective instead
+> was an assurance about the selection itself (`IRQ_MASKING_IMPLEMENTED`, compile time).
 
-Die Harnesses sind `#[cfg(kani)]`-Module direkt in den jeweiligen Quelldateien — **im Normal-Build
-vollständig inert** (keine Auswirkung auf Kernel/Tests). Die Eingabe-Obergrenzen (z. B. 200–260 B)
-sind **pfad-vollständig** gewählt: jeder Code-Pfad, der weiter läuft, verlangt strukturell eine
-kleinere Eingabe; größere Felder lösen immer den frühen Reject aus. Der Beweis ist damit für diese
-Parser effektiv vollständig, nicht bloß „getestet bis N".
+The harnesses are `#[cfg(kani)]` modules directly in the respective source files — **completely inert in
+the normal build** (no effect on kernel/tests). The input upper bounds (e.g. 200–260 B)
+are chosen **path-complete**: every code path that continues demands structurally a
+smaller input; larger fields always trigger the early reject. The proof is thus
+effectively complete for these parsers, not merely "tested up to N".
 
-## Lokal ausführen
+## Running locally
 
 ```sh
 # Einmalig:
@@ -58,119 +58,119 @@ tools/kani-verify.sh
 tools/kani-verify.sh --harness cert::kani_proofs::parse_never_panics
 ```
 
-`tools/kani-verify.sh` kopiert die (abhängigkeitsfreie) Crate nach `$TMPDIR` und ruft dort
-`cargo kani` — das umgeht den `build-std`-Zwang aus dem Workspace-`.cargo/config.toml` (Custom-Target
-für den bare-metal Kernel), der `cargo kani` sonst brechen würde.
+`tools/kani-verify.sh` copies the (dependency-free) crate to `$TMPDIR` and calls `cargo kani`
+there — this circumvents the `build-std` requirement from the workspace `.cargo/config.toml` (custom target
+for the bare-metal kernel), which would otherwise break `cargo kani`.
 
-## CI-Gate
+## CI gate
 
-Zwei Workflows führen bei **jedem Push/PR** aus:
-- `.gitea/workflows/kani.yml`: Host-Tests der Loader-Crate + Inert-Check + **alle Kani-Harnesses**.
-- `.gitea/workflows/verus.yml`: installiert Verus (gepinntes Release + Z3) + **alle Verus-Beweise**
+Two workflows run on **every push/PR**:
+- `.gitea/workflows/kani.yml`: host tests of the loader crate + inert check + **all Kani harnesses**.
+- `.gitea/workflows/verus.yml`: installs Verus (pinned release + Z3) + **all Verus proofs**
   (`tools/verus-verify.sh`).
 
-Schlägt ein Beweis fehl (eine spätere Änderung verletzt eine bewiesene Eigenschaft), **schlägt die CI
-fehl**. Damit können bereits bewiesene Eigenschaften — Kani **und** Verus — nicht unbeabsichtigt
-verloren gehen; die Verifikation ist fester Bestandteil des Entwicklungsprozesses.
+If a proof fails (a later change violates a proved property), **the CI
+fails**. Thus properties already proved — Kani **and** Verus — cannot be lost unintentionally;
+verification is a fixed part of the development process.
 
-## Tier 2 (Pilot) — Verus: dokumentierte Invariante als formale Spezifikation
+## Tier 2 (pilot) — Verus: documented invariant as a formal specification
 
-Der Unterschied zu Kani: Tier 1 beweist **Abwesenheit von Fehlern** (Panic/OOB/Overflow) bounded;
-Tier 2 beweist **funktionale Korrektheit** deduktiv — dass eine Operation eine **Invariante erhält**,
-für **alle** Zustände (unbeschränkt). Methode (vom Nutzer vorgegeben): **keinen** komplexen Bereich
-(Scheduler/IPC), sondern eine **bereits dokumentierte Kernel-Invariante** als erste formale Spec.
+The difference from Kani: tier 1 proves **absence of errors** (panic/OOB/overflow) in a bounded way;
+tier 2 proves **functional correctness** deductively — that an operation **preserves an invariant**,
+for **all** states (unbounded). Method (prescribed by the user): **no** complex area
+(scheduler/IPC), but an **already documented kernel invariant** as the first formal spec.
 
-Mehrere Pilotdateien spezifizieren **dokumentierte Kernel-Audits** und beweisen, dass die jeweiligen
-Operationen die Invariante **erhalten** — statisch + für **alle** Zustände, nicht nur an den
-Audit-Quiescenz-Punkten wie zur Laufzeit (`tools/verus-verify.sh`, gesamt **32 verified, 0 errors**
-über 9 Dateien, über **sechs** der dokumentierten Audits — `cap_audit_cdt`, `domain_audit`,
-`vspace_audit`, `dma_audit`, `loader_audit`, `trust_audit`; sechs verschiedene Invariantentypen:
-Zählen, verkettete Struktur, Klassifikation, Permission, Geometrie, Hash-Konsistenz):
+Several pilot files specify **documented kernel audits** and prove that the respective
+operations **preserve** the invariant — statically + for **all** states, not only at the
+audit quiescence points as at run time (`tools/verus-verify.sh`, in total **32 verified, 0 errors**
+over 9 files, over **six** of the documented audits — `cap_audit_cdt`, `domain_audit`,
+`vspace_audit`, `dma_audit`, `loader_audit`, `trust_audit`; six different invariant types:
+counting, linked structure, classification, permission, geometry, hash consistency):
 
-**(A) Refcount-Invariante** ([`verus/cap_cdt_refcount.rs`](../verus/cap_cdt_refcount.rs), Codes 1–3):
-1. jeder belegte Slot zeigt auf ein gültiges, belegtes Objekt;
-2. `refcount(o) == ` Anzahl belegter Slots, die auf `o` zeigen;
-3. Objekt belegt **⟺** `refcount(o) > 0`.
-Bewiesen für **`install`** (neues Objekt, `refcount=1`), **`copy`** (Slot + `refcount++`) und
-**`delete`** (Slot löschen + `refcount--`, Objekt bei 0 freigeben). Kern: vier per Induktion bewiesene
-Lemmas über die `refs_to`-Zählfunktion (push/update/member/fresh).
+**(A) Refcount invariant** ([`verus/cap_cdt_refcount.rs`](../verus/cap_cdt_refcount.rs), codes 1–3):
+1. every occupied slot points to a valid, occupied object;
+2. `refcount(o) == ` number of occupied slots pointing to `o`;
+3. object occupied **⟺** `refcount(o) > 0`.
+Proved for **`install`** (new object, `refcount=1`), **`copy`** (slot + `refcount++`) and
+**`delete`** (delete slot + `refcount--`, free the object at 0). Core: four lemmas proved by induction
+about the `refs_to` counting function (push/update/member/fresh).
 
-**(B) CDT-Sibling-Konsistenz** ([`verus/cap_cdt_tree.rs`](../verus/cap_cdt_tree.rs), Code 5): die
-Geschwisterliste der Derivation-Tree ist eine **doppelt-verkettete Liste**, deren `next`/`prev`
-**gegenseitige Inverse** sind (und nur auf gültige, belegte Knoten zeigen). Bewiesen für
-**`insert_before`** (am Listenkopf einfügen) und **`unlink`** (Knoten entfernen, Nachbarn umhängen).
+**(B) CDT sibling consistency** ([`verus/cap_cdt_tree.rs`](../verus/cap_cdt_tree.rs), code 5): the
+sibling list of the derivation tree is a **doubly linked list** whose `next`/`prev`
+are **mutual inverses** (and point only to valid, occupied nodes). Proved for
+**`insert_before`** (insert at the list head) and **`unlink`** (remove a node, re-hang neighbours).
 
-**(C) CDT-Strukturinvariante (vereint)** ([`verus/cap_cdt_structure.rs`](../verus/cap_cdt_structure.rs),
-Codes 4-lokal + 5 + 6): ein Knotenmodell mit Objekt + allen vier Verkettungen (parent/first_child/
-next/prev). Invariante: Ableitung **teilt das Objekt** (`object[parent]==object[s]`, 4-lokal),
-Sibling-Inverse (5), `first_child` zeigt zurück + ist Listenkopf (`prev==None`, 6). Bewiesen für
-**`derive`** (eine Capability ableiten = neues Kind am Kopf der Kinderliste). Kernidee: der bisherige
-Kopf hat `prev==None`, wird also von keinem `next` referenziert → das Einhängen davor bricht nichts.
+**(C) CDT structure invariant (unified)** ([`verus/cap_cdt_structure.rs`](../verus/cap_cdt_structure.rs),
+codes 4-local + 5 + 6): a node model with object + all four linkings (parent/first_child/
+next/prev). Invariant: derivation **shares the object** (`object[parent]==object[s]`, 4-local),
+sibling inverse (5), `first_child` points back + is list head (`prev==None`, 6). Proved for
+**`derive`** (deriving a capability = new child at the head of the child list). Core idea: the former
+head has `prev==None`, so it is referenced by no `next` → inserting before it breaks nothing.
 
-**(D) Domänen-Policy** ([`verus/domain_policy.rs`](../verus/domain_policy.rs), `domain_audit` Codes
-1+2): Hardware-Caps (MMIO/IRQ/DMA) dürfen **nur** HardwareLand-PDs halten, Autoritäts-Caps
-(PdControl/Loader) **nur** TrustedSas. Bewiesen, dass das Gate **`install_cap_checked`** (installiert
-nur policy-konform) die Klassifikations-Invariante erhält — eine HW-Cap landet nie in einer
-Nicht-HardwareLand-PD.
+**(D) Domain policy** ([`verus/domain_policy.rs`](../verus/domain_policy.rs), `domain_audit` codes
+1+2): hardware caps (MMIO/IRQ/DMA) may be held **only** by HardwareLand PDs, authority caps
+(PdControl/Loader) **only** by TrustedSas. Proved that the gate **`install_cap_checked`** (installs
+only policy-conformantly) preserves the classification invariant — an HW cap never lands in a
+non-HardwareLand PD.
 
-**(E) W^X** ([`verus/wx_invariant.rs`](../verus/wx_invariant.rs), `vspace_audit`): **keine** gemappte
-EL0-Seite ist zugleich schreib- **und** ausführbar (Code-Integrität). Bewiesen für **`map_page`**
-(mappt nur W^X-konform) und **`make_writable`** (W nur auf nicht-ausführbare Seiten).
+**(E) W^X** ([`verus/wx_invariant.rs`](../verus/wx_invariant.rs), `vspace_audit`): **no** mapped
+EL0 page is both writable **and** executable (code integrity). Proved for **`map_page`**
+(maps only W^X-conformantly) and **`make_writable`** (W only on non-executable pages).
 
-**(F) DMA-Disjunktheit** ([`verus/dma_disjoint.rs`](../verus/dma_disjoint.rs), `dma_audit` Inv. 1):
-kernel-ausgeschnittene DMA-Regionen sind **paarweise disjunkt** + disjunkt von der Kernel-Region
-(Grundlage der DMA-Isolation). Bewiesen für **`alloc_region`** (hängt nur disjunkte Regionen ein).
+**(F) DMA disjointness** ([`verus/dma_disjoint.rs`](../verus/dma_disjoint.rs), `dma_audit` inv. 1):
+kernel-carved DMA regions are **pairwise disjoint** + disjoint from the kernel region
+(basis of DMA isolation). Proved for **`alloc_region`** (inserts only disjoint regions).
 
-**(G) CDT-Azyklizität** ([`verus/cap_cdt_acyclic.rs`](../verus/cap_cdt_acyclic.rs), `cap_audit_cdt`
-Code 7 — die **schwierigste**): die Eltern-Kette hat **keinen Zyklus irgendeiner Länge**. Bewiesen
-über ein **Wohlfundiertheits-Maß** (ein `rank`, der entlang `parent` strikt fällt → jede Kette
-terminiert). `derive` erhält die Rang-Monotonie; das Lemma `ancestor_rank_decreases` (Induktion über
-die Kettenlänge) liefert die **allgemeine** Aussage `not_own_ancestor`: kein Knoten ist sein eigener
-`k`-ter Vorfahre, für **beliebiges** `k`.
+**(G) CDT acyclicity** ([`verus/cap_cdt_acyclic.rs`](../verus/cap_cdt_acyclic.rs), `cap_audit_cdt`
+code 7 — the **most difficult**): the parent chain has **no cycle of any length**. Proved
+via a **well-foundedness measure** (a `rank` that falls strictly along `parent` → every chain
+terminates). `derive` preserves the rank monotonicity; the lemma `ancestor_rank_decreases` (induction over
+the chain length) delivers the **general** statement `not_own_ancestor`: no node is its own
+`k`-th ancestor, for **arbitrary** `k`.
 
-**(H) Loader-Use-after-free-Schutz** ([`verus/loader_disjoint.rs`](../verus/loader_disjoint.rs),
-`loader_audit`): kein geladenes Segment überlappt eine **freie** RAM-Region. Bewiesen für **`free_ram`**
-(gibt RAM nur zurück, wenn disjunkt von allen Segmenten).
+**(H) Loader use-after-free protection** ([`verus/loader_disjoint.rs`](../verus/loader_disjoint.rs),
+`loader_audit`): no loaded segment overlaps a **free** RAM region. Proved for **`free_ram`**
+(returns RAM only if disjoint from all segments).
 
-**(I) TrustedSAS-Key-DB-Konsistenz** ([`verus/trust_keydb.rs`](../verus/trust_keydb.rs), `trust_audit`):
-die read-only Key-DB ist **selbst-zertifizierend** (`key_id == fingerprint(pubkey)`) + die `key_id`s
-sind **eindeutig**. Bewiesen für **`add_key`** (`key_id := fingerprint(pubkey)`, nur bei freier key_id).
-`fingerprint` ist uninterpretiert — der Beweis hängt nur von ihrer Funktionseigenschaft ab.
+**(I) TrustedSAS key DB consistency** ([`verus/trust_keydb.rs`](../verus/trust_keydb.rs), `trust_audit`):
+the read-only key DB is **self-certifying** (`key_id == fingerprint(pubkey)`) + the `key_id`s
+are **unique**. Proved for **`add_key`** (`key_id := fingerprint(pubkey)`, only if the key_id is free).
+`fingerprint` is uninterpreted — the proof depends only on its functional property.
 
-So werden `cap_audit_cdt`, `domain_audit`, `vspace_audit`, `dma_audit`, `loader_audit` + `trust_audit`
-von zur Laufzeit **geprüften** zu **bewiesenen** Invarianten — sechs der dokumentierten Audits.
+Thus `cap_audit_cdt`, `domain_audit`, `vspace_audit`, `dma_audit`, `loader_audit` + `trust_audit`
+go from **checked** at run time to **proved** invariants — six of the documented audits.
 
-Lokal ausführen: `tools/verus-verify.sh` (Verus + Z3 aus dem Release nach `~/.verus`; geforderte
-rustc-Toolchain via `rustup toolchain install`). Strategie/Stufenmodell: `ARMTest/formale-verifikation-aufwand.md`.
+Run locally: `tools/verus-verify.sh` (Verus + Z3 from the release into `~/.verus`; the required
+rustc toolchain via `rustup toolchain install`). Strategy/tier model: `ARMTest/formale-verifikation-aufwand.md`.
 
-**Nächste Verus-Schritte (offen, schwieriger):** `delete_leaf` auf der vereinten Struktur (mehr
-Fallunterscheidung als `derive`); die Kinderlisten-**Erreichbarkeit** aus Code 4 (Listen-Reachability);
-die **Azyklizität** der Eltern-Kette (Code 7, braucht ein Wohlfundiertheits-Maß); dann die übrigen
-Audits als eigene Modelle (`domain_audit`, W^X/`vspace_audit`, `dma_audit`); danach schrittweise
-Richtung Scheduler/IPC.
+**Next Verus steps (open, more difficult):** `delete_leaf` on the unified structure (more
+case distinction than `derive`); the child-list **reachability** from code 4 (list reachability);
+the **acyclicity** of the parent chain (code 7, needs a well-foundedness measure); then the remaining
+audits as separate models (`domain_audit`, W^X/`vspace_audit`, `dma_audit`); afterwards step by step
+towards scheduler/IPC.
 
-> **Realistische Einordnung:** Dies ist eine **dauerhaft wachsende** Verifikation der dokumentierten
-> Kernel-Invarianten, kein Einmal-Ziel. Volle funktionale Korrektheit + Isolation/Info-Flow + ein
-> Hardware-Modell + die **echte SMP-Nebenläufigkeit** (von Verus single-threaded **nicht** erfasst)
-> sind Forschungsklasse (Tier 3, mehrjährig — s. `ARMTest/formale-verifikation-aufwand.md`). Jede
-> hier bewiesene Invariante ist ein abgeschlossener, CI-fähiger Baustein auf diesem Weg.
+> **Realistic classification:** This is a **permanently growing** verification of the documented
+> kernel invariants, not a one-off goal. Full functional correctness + isolation/information flow + a
+> hardware model + the **real SMP concurrency** (**not** captured by single-threaded Verus)
+> are research class (tier 3, multi-year — see `ARMTest/formale-verifikation-aufwand.md`). Every
+> invariant proved here is a closed, CI-capable building block on this path.
 
-## Neue Komponenten aufnehmen
+## Adding new components
 
-1. `#[cfg(kani)] mod kani_proofs { use super::*; … }` an die Quelldatei anhängen.
-2. Harnesses mit `#[kani::proof]` (+ `#[kani::unwind(N)]` bei Schleifen) schreiben; Eingaben via
+1. Append `#[cfg(kani)] mod kani_proofs { use super::*; … }` to the source file.
+2. Write harnesses with `#[kani::proof]` (+ `#[kani::unwind(N)]` for loops); inputs via
    `kani::any()` + `kani::assume(len <= MAXLEN)`.
-3. Eine **pfad-vollständige** Eingabeschranke wählen + im Kommentar begründen.
-4. Lokal `tools/kani-verify.sh` grün → committen (das CI-Gate prüft es dann dauerhaft).
+3. Choose a **path-complete** input bound + justify it in a comment.
+4. Locally `tools/kani-verify.sh` green → commit (the CI gate then checks it permanently).
 
-## Roadmap Tier 1
+## Roadmap tier 1
 
-- [x] Cert-Parser (`cert.rs`)
-- [x] Boot-Archiv-Parser (`archive.rs`)
-- [x] ELF-Parser (`elf.rs`)
-- [x] CI-Gate (Gitea Actions)
-- [x] Region-Runtime (`caprock-region`: RegionView — Bounds-/Slice-/Overflow-Verträge um die `unsafe`-Blöcke)
-- [x] Synchronisationsprimitive (`caprock-sync`: Memory-Safety/Round-Trip/Arithmetik, single-thread)
-- [x] Concurrency-Modellprüfung der Locks (Loom, Stufe 2, seit `c2116ac`) — **mit einer Grenze,
-      die 2026-07-29 teuer wurde, s. unten**
-- [ ] kernweite Overflow-/Arithmetik-Checks
+- [x] Cert parser (`cert.rs`)
+- [x] Boot archive parser (`archive.rs`)
+- [x] ELF parser (`elf.rs`)
+- [x] CI gate (Gitea Actions)
+- [x] Region runtime (`caprock-region`: RegionView — bounds/slice/overflow contracts around the `unsafe` blocks)
+- [x] Synchronisation primitives (`caprock-sync`: memory safety/round trip/arithmetic, single-thread)
+- [x] Concurrency model checking of the locks (Loom, stage 2, since `c2116ac`) — **with a limit
+      that became expensive on 2026-07-29, see below**
+- [ ] kernel-wide overflow/arithmetic checks

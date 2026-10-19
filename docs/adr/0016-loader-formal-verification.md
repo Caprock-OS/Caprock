@@ -1,47 +1,47 @@
-# ADR 0016 — Formale funktionale Verifikation des Loaders (Verus, Phase 2)
+# ADR 0016 — Formal functional verification of the loader (Verus, phase 2)
 
-Status: **angenommen** · Datum: 2026-06-27 · Phase 2 der funktionalen Verifikation.
-Bezug: ADR 0011 (Binary-Loader), ADR 0014 (TrustedSAS-Zertifikate), ADR 0015 (Verifikationsansatz),
+Status: **accepted** · Date: 2026-06-27 · Phase 2 of functional verification.
+Reference: ADR 0011 (binary loader), ADR 0014 (TrustedSAS certificates), ADR 0015 (verification approach),
 `Verification/loader/`, `docs/verification.md`.
 
-## Kontext
+## Context
 
-Phase 1 (Capability-System) hat die Methodik etabliert: abstraktes, faithful Modell + Verus-Beweis,
-realer Code unverändert, mehrschichtig (Audit+Fuzzer+Kani+Verus). Phase 2 verifiziert den **Loader** —
-konkret die **Sicherheitslogik** `verify_image`/`verify_trusted_cert` (ADR 0014) + den Lade-Zustands-
-automaten. Die **Parser** (cert/archive/elf) sind bereits mit **Kani** panik-/OOB-frei bewiesen
-(`docs/verification.md`) — sie bilden die Grundlage; Phase 2 baut die **funktionale** Schicht darüber.
+Phase 1 (capability system) established the methodology: abstract, faithful model + Verus proof,
+real code unchanged, multi-layered (audit+fuzzer+Kani+Verus). Phase 2 verifies the **loader** —
+specifically the **security logic** `verify_image`/`verify_trusted_cert` (ADR 0014) + the load state
+machine. The **parsers** (cert/archive/elf) are already proved panic-/OOB-free with **Kani**
+(`docs/verification.md`) — they form the foundation; phase 2 builds the **functional** layer on top.
 
-## Analyse
+## Analysis
 
-`verify_image(prog)`: UserLand/HardwareLand → `true` (hardware-isoliert); TrustedSAS →
-`verify_trusted_cert` = Konjunktion von Checks (Algorithmus Ed25519 + Siglänge 64, `key_id` in der
-read-only Key-DB nicht-revoziert + selbstkonsistent, Signatur über die Nachricht, `binary_hash`/
-`manifest_hash`-Bindung, `program_id`/`version`-Identität, Anti-Downgrade, `unsafe_status==ALL_PASS`).
-`load_image` ruft `verify_image` **vor** jeder Ressourcenvergabe → atomar (kein partieller Ladezustand).
+`verify_image(prog)`: UserLand/HardwareLand → `true` (hardware-isolated); TrustedSAS →
+`verify_trusted_cert` = conjunction of checks (algorithm Ed25519 + signature length 64, `key_id` in the
+read-only key DB non-revoked + self-consistent, signature over the message, `binary_hash`/
+`manifest_hash` binding, `program_id`/`version` identity, anti-downgrade, `unsafe_status==ALL_PASS`).
+`load_image` calls `verify_image` **before** any resource allocation → atomic (no partial load state).
 
-## Variantenvergleich
+## Comparison of variants
 
-| Variante | Beschreibung | Bewertung |
+| Variant | Description | Assessment |
 |---|---|---|
-| V1 Krypto mitmodellieren | Ed25519/SHA-256 in Verus | unnötig + riesig; Krypto = etablierte Bibliothek (TCB). Verworfen. |
-| **V2 Krypto abstrahieren (gewählt)** | `sig_valid`/`*_hash_ok` als durch die Signatur geschützte **Fakten**; die Gate-/Zustandsautomaten-**Logik** beweisen | erfasst genau die Loader-Eigenheit (Entscheidungslogik + Atomarität); die Krypto-Treue tragen die Bibliotheken + der Round-Trip-Test (ext-28) |
-| V3 reale-Code-Annotation | `loader.rs` direkt annotieren | verändert die Architektur (Verbot); aufgeschoben |
+| V1 model the crypto too | Ed25519/SHA-256 in Verus | unnecessary + huge; crypto = established library (TCB). Rejected. |
+| **V2 abstract the crypto (chosen)** | `sig_valid`/`*_hash_ok` as **facts** protected by the signature; prove the gate/state-machine **logic** | captures exactly the loader's peculiarity (decision logic + atomicity); the fidelity of the crypto is carried by the libraries + the round-trip test (ext-28) |
+| V3 real-code annotation | annotate `loader.rs` directly | changes the architecture (prohibited); deferred |
 
-## Entscheidung
+## Decision
 
-**V2** — die Krypto-/Hash-Fakten abstrahieren, die **Gate- + Lade-Zustandsautomaten-Logik** formal
-verifizieren. Zu beweisende Eigenschaften: **Soundness** (kein unverifiziertes TrustedSAS lädt),
-**Programmintegritäts-/Identitäts-Bindung**, **Revocation** (+ Vollständigkeit), **Domänen-Gating**
-(UserLand/HardwareLand brauchen kein Cert), **Atomarität** (genau ein Ladeausgang, kein inkonsistenter
-Zustand), **Determinismus** (read-only Key-DB → reproduzierbar). Abstraktes Modell; realer Code
-unverändert; mehrschichtig (die Parser-Speichersicherheit liefert Kani).
+**V2** — abstract the crypto/hash facts, formally verify the **gate + load state machine logic**.
+Properties to prove: **soundness** (no unverified TrustedSAS loads),
+**program integrity/identity binding**, **revocation** (+ completeness), **domain gating**
+(UserLand/HardwareLand need no cert), **atomicity** (exactly one load outcome, no inconsistent
+state), **determinism** (read-only key DB → reproducible). Abstract model; real code
+unchanged; multi-layered (the parsers' memory safety is delivered by Kani).
 
-## Konsequenzen
+## Consequences
 
-- **Positiv:** die TrustedSAS-Lade-Sicherheit (ADR 0014) ist formal bewiesen, nicht nur per Selbsttest/
-  Fuzzer geprüft. Klare Schichtung: Kani (Parser-Speichersicherheit) + Verus (Gate-/Automaten-Logik).
-- **Grenzen/TCB:** die Krypto-Primitive (ed25519-dalek/sha2) + die Modell↔Code-Treue sind Vertrauens-
-  basis (abgesichert durch den Host-Round-Trip + die Laufzeit-Selbsttests/`trust_audit`). Das
-  Capability-**Endowment** der geladenen PD (Domänen-Policy beim Laden) ist eine spätere Ausbaustufe,
-  baut auf Phase 1 (Domänen-Policy bereits bewiesen) auf.
+- **Positive:** the TrustedSAS load security (ADR 0014) is formally proved, not only checked by self-test/
+  fuzzer. Clear layering: Kani (parser memory safety) + Verus (gate/state-machine logic).
+- **Limits/TCB:** the crypto primitives (ed25519-dalek/sha2) + the model↔code fidelity are the trust
+  base (backed by the host round trip + the run-time self-tests/`trust_audit`). The
+  capability **endowment** of the loaded PD (domain policy at load time) is a later stage of expansion,
+  builds on phase 1 (domain policy already proved).

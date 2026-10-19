@@ -1,46 +1,46 @@
-# B4b-Messstand: Befund 2026-09-10 (virtio-blk sendet keinen MSI-X)
+# B4b measurement rig: finding 2026-09-10 (virtio-blk sends no MSI-X)
 
-Werkzeug: `tools/lx_b4b-messstand.sh` (baut/erneuert Archiv, bootet eine Variante mit
-Protokoll-Auszug). Logs unter `build/diag/lx-b4b-*.{log,auszug,qemu-err}` (gitignored).
+Tool: `tools/lx_b4b-messstand.sh` (builds/renews the archive, boots one variant with a
+log excerpt). Logs under `build/diag/lx-b4b-*.{log,auszug,qemu-err}` (gitignored).
 
-## Messstand (je ~3 Min, 4 Laeufe + Setup)
+## Measurement rig (about 3 min each, 4 runs + setup)
 
-| Lauf | Variante | used.idx | Queue-Vektor | IRTE | Faults | IRQ? |
+| Run | Variant | used.idx | Queue vector | IRTE | Faults | IRQ? |
 |---|---|---|---|---|---|---|
-| Setup | TCG+intremap, altes Archiv | – | – | – | – | Fehlstart: Manifest band nicht an Kernel (Archiv 08-28 vs. Kernel 09-09) |
-| L1 | TCG, intremap=on, B4 aus | 1 | `0xffff` (keine) | – | – | nein (erwartbar: Queue nie programmiert) |
-| M1 | TCG, intremap=on, Messmodus | 1 | `0x0000` | present, SVT/SID, Zeile `addr=0xfee00008` unmaskiert, `msix-ctrl=0x8004` | leer | nein (`weckrufe=0`, nur Self-IPI) |
-| M2 | TCG, intremap=on, **eim=on**, Messmodus | 1 | `0x0000` | identisch | leer | nein (zeichengleich zu M1) |
-| Rueckbau | TCG, intremap=on, B4 aus | 1 | `0xffff` | – | – | Sanity: `drv`/`blkdev` wieder ALL PASS |
+| Setup | TCG+intremap, old archive | – | – | – | – | False start: the manifest did not bind to the kernel (archive 08-28 vs. kernel 09-09) |
+| L1 | TCG, intremap=on, B4 off | 1 | `0xffff` (none) | – | – | no (expected: queue never programmed) |
+| M1 | TCG, intremap=on, measuring mode | 1 | `0x0000` | present, SVT/SID, row `addr=0xfee00008` unmasked, `msix-ctrl=0x8004` | empty | no (`weckrufe=0`, only self-IPI) |
+| M2 | TCG, intremap=on, **eim=on**, measuring mode | 1 | `0x0000` | identical | empty | no (character-identical to M1) |
+| Rollback | TCG, intremap=on, B4 off | 1 | `0xffff` | – | – | Sanity: `drv`/`blkdev` ALL PASS again |
 
-Durchgehend belegt: `irtevgb: ALL PASS`, KOMPAT-Self-IPI `angekommen=true zugestellt=true`
-(Vektor 0x64), `apic: x2APIC (MSR-Pfad)`.
+Proved throughout: `irtevgb: ALL PASS`, KOMPAT self-IPI `angekommen=true zugestellt=true`
+(vector 0x64), `apic: x2APIC (MSR-Pfad)`.
 
-Neuer Messmodus im Demo-Treiber (`programs/hardware/virtio-blk`, Standard AUS): `B4_MESSEN`
-programmiert die Queue auf Zeile 0 wie der Produktweg, wartet mit Frist des Messenden
-(`wait_frist`, 200 Ticks, `ERR_TIMEOUT`, kein Poll-Rueckfall). Ohne ihn sprechen alle
-Umgebungsläufe ueber eine nie programmierte Queue (`0xffff`).
+New measuring mode in the demo driver (`programs/hardware/virtio-blk`, default OFF): `B4_MESSEN`
+programs the queue onto row 0 like the product path, waits with the measurer's deadline
+(`wait_frist`, 200 ticks, `ERR_TIMEOUT`, no poll fallback). Without it all
+surrounding runs talk over a never-programmed queue (`0xffff`).
 
-## Ursache (Stand Hypothese, kein Beweis)
+## Cause (status: hypothesis, no proof)
 
-- **KVM entlastet:** M1 unter TCG reproduziert den KVM-Befund exakt (programmierter
-  Queue-Vektor + `used.idx=1` + kein IRQ + keine Faults). „KVM/split-irqchip" war es nicht.
-- **QEMU-Flag allein genuegt nicht:** M2 mit `eim=on` ist zeichengleich zu M1.
-- **Verbleibender Verdacht (Format, kernelseitig):** Der Kern laeuft **x2APIC**
-  (`intc.rs:init_cpu` schaltet ihn ein; Log: MSR-Pfad), aber die IOMMU-Seite ist
-  **xAPIC-formatig**: `vtd.rs:976-979` laesst `IRTA.EIME` (Bit 11) aus, `irte.rs:34-37/96-113`
-  kodiert das Ziel als 8-Bit-ID in Bits 47:40 (Abweisung >255). x2APIC-CPU gegen
-  EIME=0-IRTE: QEMU stellt eine remappte Nachricht dann still nicht zu (kein Fault).
-  Naechster Schritt ist der EIME-Lauf (Patch unten + `eim=on`), nicht `B4_WARTEN`.
-- Ohne-intremap-Lauf nicht gefahren (Budget): `irte_vergabe_moeglich()==false` →
-  `msi_grant()=None` → Treiber pollt rechtmaessig. Traegt zur Zustellfrage nichts bei.
+- **KVM exonerated:** M1 under TCG reproduces the KVM finding exactly (programmed
+  queue vector + `used.idx=1` + no IRQ + no faults). "KVM/split-irqchip" was not it.
+- **The QEMU flag alone is not enough:** M2 with `eim=on` is character-identical to M1.
+- **Remaining suspicion (format, kernel side):** the kernel runs **x2APIC**
+  (`intc.rs:init_cpu` switches it on; log: MSR path), but the IOMMU side is
+  **xAPIC-format**: `vtd.rs:976-979` leaves out `IRTA.EIME` (bit 11), `irte.rs:34-37/96-113`
+  encodes the destination as an 8-bit ID in bits 47:40 (rejection >255). x2APIC CPU against
+  an EIME=0 IRTE: QEMU then silently does not deliver a remapped message (no fault).
+  The next step is the EIME run (patch below + `eim=on`), not `B4_WARTEN`.
+- Run without intremap not driven (budget): `irte_vergabe_moeglich()==false` →
+  `msi_grant()=None` → the driver rightfully polls. Contributes nothing to the delivery question.
 
-## PATCH-TEXT (HAL-Besitz, NICHT angewendet -- gegen VT-d-Manual pruefen)
+## PATCH TEXT (HAL ownership, NOT applied -- check against the VT-d manual)
 
-QEMU-Seite: `-device intel-iommu,caching-mode=on,intremap=on,eim=on` mit
-`-machine q35,kernel-irqchip=split`. `eim` nur mit `intremap` sinnvoll; allein heilt es
-nichts (M2). Voraussetzung dafuer, dass eine EIME=1-IRTE ueberhaupt an einen
-x2APIC-LAPIC zugestellt werden kann.
+QEMU side: `-device intel-iommu,caching-mode=on,intremap=on,eim=on` with
+`-machine q35,kernel-irqchip=split`. `eim` only makes sense with `intremap`; on its own it heals
+nothing (M2). Precondition for an EIME=1 IRTE to be deliverable to an
+x2APIC LAPIC at all.
 
 ```patch
 --- a/crates/caprock-hal/src/x86_64/vtd.rs   (ir_enable, Kontext Zeilen 969-979)

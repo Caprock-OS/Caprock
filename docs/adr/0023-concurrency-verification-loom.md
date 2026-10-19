@@ -1,60 +1,60 @@
-# ADR 0023 — Concurrency-Verifikation der Sync-Primitive (Loom)
+# ADR 0023 — Concurrency verification of the sync primitives (Loom)
 
-Status: **angenommen** · Datum: 2026-06-29 · ergänzt die funktionale Verifikation (Verus/Kani).
-Bezug: ADR 0015 (Verifikationsansatz), `crates/caprock-sync`, `Verification/concurrency/`,
-`docs/invariants.md` §1a (IRQ-safe Locks).
+Status: **accepted** · Date: 2026-06-29 · complements functional verification (Verus/Kani).
+Reference: ADR 0015 (verification approach), `crates/caprock-sync`, `Verification/concurrency/`,
+`docs/invariants.md` §1a (IRQ-safe locks).
 
-## Kontext
+## Context
 
-Verus (Tier 2) ist **single-threaded** und kann **Nebenläufigkeit** (Interleavings über Kerne) nicht
-erfassen — das wurde durchgängig als HW-/Concurrency-Vertrauensgrenze ausgeklammert. Die
-sicherheitskritischen Synchronisationsprimitive (`SpinLock` = IRQ-safe Ticket-Lock, `RwSpinLock` =
-writer-bevorzugend) tragen aber die gesamte SMP-Korrektheit. Der `RwSpinLock` enthält eine **subtile**
-Stelle: der Release löscht NUR das WRITER-Bit (`fetch_and(!WRITER)`, **nicht** `store(0)`), weil ein
-Leser transient optimistisch hochgezählt haben kann. Dieses Argument war bisher nur **per Code-Lektüre**
-begründet.
+Verus (tier 2) is **single-threaded** and cannot capture **concurrency** (interleavings across cores)
+— this was consistently excluded as an HW/concurrency trust boundary. But the
+security-critical synchronisation primitives (`SpinLock` = IRQ-safe ticket lock, `RwSpinLock` =
+writer-preferring) carry the entire SMP correctness. The `RwSpinLock` contains a **subtle**
+spot: the release clears ONLY the WRITER bit (`fetch_and(!WRITER)`, **not** `store(0)`), because a
+reader may have transiently counted up optimistically. This argument had so far been
+justified only **by reading the code**.
 
-## Variantenvergleich
+## Comparison of variants
 
-| Variante | Beschreibung | Bewertung |
+| Variant | Description | Assessment |
 |---|---|---|
-| V1 nur Code-Review | manuelle Interleaving-Analyse | fehleranfällig; das transiente-Leser-Argument ist subtil |
-| V2 TLA+/Spin | formales Modell der Lock-Logik | mächtig, aber separates Modell (Drift zur Realität), hoher Aufwand |
-| **V3 Loom (gewählt)** | exhaustive Interleaving-Exploration des **echten Rust-Codes** (getreue Kopie mit loom-Atomics) | prüft die reale Lock-Logik über ALLE Interleavings; klein; mit Sensitivitäts-Gegenprobe |
+| V1 code review only | manual interleaving analysis | error-prone; the transient-reader argument is subtle |
+| V2 TLA+/Spin | formal model of the lock logic | powerful, but a separate model (drift from reality), high effort |
+| **V3 Loom (chosen)** | exhaustive interleaving exploration of the **real Rust code** (faithful copy with loom atomics) | checks the real lock logic over ALL interleavings; small; with a sensitivity counter-proof |
 
-## Entscheidung
+## Decision
 
-> **Überholt seit 2026-08-02 (B-7.2).** Die Kopien sind weg: `tools/loom-verify.sh` übernimmt
-> `crates/caprock-sync/src/lib.rs` **unverändert**, und die Beweise stehen in derselben Datei
-> (`#[cfg(all(loom, test))] mod loom_proofs`). Gemessen, warum das zählt: eine abgeschwächte
-> Speicherordnung im Ticket-Release (`Release` → `Relaxed`) lief bei der Kopie durch **alle**
-> Beweise; am echten Code fallen 2 von 10. In `Verification/concurrency/loom/src/` liegen nur
-> noch `hierarchy.rs` und `crosscore.rs` — die modellieren **andere** Gegenstände (globale
-> Sperrordnung, Cross-Core-IPC) und sind keine Nachbildungen von `caprock-sync`.
+> **Superseded since 2026-08-02 (B-7.2).** The copies are gone: `tools/loom-verify.sh` takes
+> `crates/caprock-sync/src/lib.rs` **unchanged**, and the proofs are in the same file
+> (`#[cfg(all(loom, test))] mod loom_proofs`). Measured why this matters: a weakened
+> memory ordering in the ticket release (`Release` → `Relaxed`) passed **all**
+> proofs on the copy; on the real code 2 of 10 fail. In `Verification/concurrency/loom/src/` only
+> `hierarchy.rs` and `crosscore.rs` remain — they model **other** subjects (global
+> lock order, cross-core IPC) and are not replicas of `caprock-sync`.
 >
-> Der folgende Abschnitt beschreibt den überholten Zustand und bleibt stehen, weil die Begründung
-> für die Entscheidung dort steht.
+> The following section describes the superseded state and stays, because the reasoning
+> for the decision is found there.
 
-**V3** — ein eigenständiges Loom-Artefakt (`Verification/concurrency/loom/`): **getreue Kopien** der
-`RwSpinLock`- und `TicketLock`-Logik mit `loom`-Atomics + `loom::cell::UnsafeCell`. `loom::model()`
-exploriert **alle** Thread-Interleavings und prüft: gegenseitiger Ausschluss, **kein Lost-Update**
-(zwei Writer → exakt +2), **kein torn read** (ein Reader sieht nur konsistente Werte), und dass der
-`fetch_and(!WRITER)`-Release einen **transienten Leser-Zähler** erhält. Via `tools/loom-verify.sh`
-(kopiert nach `$TMPDIR` — Loom braucht Host-std + crates.io, der Workspace erzwingt sonst build-std).
+**V3** — a standalone Loom artefact (`Verification/concurrency/loom/`): **faithful copies** of the
+`RwSpinLock` and `TicketLock` logic with `loom` atomics + `loom::cell::UnsafeCell`. `loom::model()`
+explores **all** thread interleavings and checks: mutual exclusion, **no lost update**
+(two writers → exactly +2), **no torn read** (a reader sees only consistent values), and that the
+`fetch_and(!WRITER)` release preserves a **transient reader count**. Via `tools/loom-verify.sh`
+(copies to `$TMPDIR` — Loom needs host std + crates.io, the workspace would otherwise force build-std).
 
-**Sensitivitäts-Gegenprobe:** mit injiziertem `store(0)`-statt-`fetch_and`-Bug **fängt Loom** ihn (zwei
-der drei RwSpinLock-Beweise schlagen fehl) → der Harness ist nachweislich aussagekräftig (analog zu den
-Kernel-Sensitivitätstests).
+**Sensitivity counter-proof:** with an injected `store(0)`-instead-of-`fetch_and` bug **Loom catches** it (two
+of the three RwSpinLock proofs fail) → the harness is demonstrably meaningful (analogous to the
+kernel sensitivity tests).
 
-## Konsequenzen
+## Consequences
 
-- **Positiv:** der RwSpinLock-Release (`fetch_and`) ist als **notwendig** maschinen-verifiziert (über
-  alle Interleavings), nicht nur per Lektüre; der Ticket-Lock-Ausschluss ebenso. **Erweitert** (zweite
-  Stufe) auf zwei weitere Modelle: die **globale Lock-Hierarchie** (`hierarchy.rs` — die belegten
-  Schachtelungen CAPS→MEM/DMA_CTX→MEM/SCHEDS→FP_STATES nebenläufig sind deadlock-frei; eine Inversion
-  deadlockt nachweislich) und die **Cross-Core-IPC**-Pfade (`crosscore.rs` — one-lock-per-op: je ein
-  SCHEDS-Lock, nie zwei → deadlock-frei; zwei gehaltene SCHEDS deadlocken nachweislich). 8 Modelle, je
-  sensitivitäts-gegengeprüft.
-- **Grenzen/offen:** die Hierarchie-/Cross-Core-Modelle nutzen **Repräsentanten** der realen Locks
-  (nicht jeden Pfad statisch); der vollständige „jeder Pfad schachtelt aufsteigend"-Nachweis bleibt beim
-  Lock-Ordering-Sweep + den Audits. DAIF-IRQ-Maskierung ist orthogonal (nicht modelliert).
+- **Positive:** the RwSpinLock release (`fetch_and`) is machine-verified as **necessary** (over
+  all interleavings), not only by reading; the ticket lock exclusion likewise. **Extended** (second
+  stage) to two further models: the **global lock hierarchy** (`hierarchy.rs` — the observed
+  nestings CAPS→MEM/DMA_CTX→MEM/SCHEDS→FP_STATES are deadlock-free when concurrent; an inversion
+  demonstrably deadlocks) and the **cross-core IPC** paths (`crosscore.rs` — one lock per op: one
+  SCHEDS lock each, never two → deadlock-free; two held SCHEDS demonstrably deadlock). 8 models, each
+  checked with a sensitivity counter-proof.
+- **Limits/open:** the hierarchy/cross-core models use **representatives** of the real locks
+  (not every path statically); the complete "every path nests ascending" proof remains with the
+  lock-ordering sweep + the audits. DAIF IRQ masking is orthogonal (not modelled).

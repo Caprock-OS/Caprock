@@ -1,74 +1,74 @@
-# ADR 0001 — Toolchain, Target und Build
+# ADR 0001 — Toolchain, target and build
 
-**Status:** akzeptiert (Phase 0) · **Datum:** 2026-06-23
+**Status:** accepted (phase 0) · **Date:** 2026-06-23
 
 ## Motivation
 
-Ein Bare-Metal-aarch64-Kernel in Rust braucht: eine `no_std`-Umgebung, eine
-Cross-Compilation-Target-Definition, eine reproduzierbare Toolchain und einen
-Boot-Pfad, der ohne Bootloader-SDK direkt unter QEMU lädt.
+A bare-metal aarch64 kernel in Rust needs: a `no_std` environment, a
+cross-compilation target definition, a reproducible toolchain and a
+boot path that loads directly under QEMU without a bootloader SDK.
 
-## Analysierte Alternativen
+## Alternatives analysed
 
-### A) Eigener Kernel via `qemu -kernel` (gewählt)
-Eigene Boot-Assembly, eigenes Linker-Script, Laden des ELF direkt durch QEMU.
+### A) Own kernel via `qemu -kernel` (chosen)
+Own boot assembly, own linker script, loading of the ELF directly by QEMU.
 
-- **+** Voll unabhängig von der seL4-/Microkit-SDK; Caprock ist ein
-  eigenständiger Kernel, kein PD auf fremdem Kernel.
-- **+** Minimale bewegliche Teile, schneller Boot, einfache Tests.
-- **−** Wir müssen Trap-Vektoren, Timer, GIC, MMU selbst aufsetzen (ohnehin Ziel).
+- **+** Fully independent of the seL4/Microkit SDK; Caprock is a
+  standalone kernel, not a PD on a foreign kernel.
+- **+** Minimal moving parts, fast boot, simple tests.
+- **−** We have to set up trap vectors, timer, GIC, MMU ourselves (the goal anyway).
 
-### B) Microkit-Loader wiederverwenden (wie `microkit_rust`)
-Die vorhandene `microkit_rust`-Implementierung baut Userland-PDs *auf* dem
-seL4-Kernel mittels Microkit-SDK und `loader.img`.
+### B) Reuse the Microkit loader (like `microkit_rust`)
+The existing `microkit_rust` implementation builds userland PDs *on top of* the
+seL4 kernel using the Microkit SDK and `loader.img`.
 
-- **+** Vorhandene Build-Mechanik (build-std, custom Target) ist erprobt.
-- **−** Setzt einen darunterliegenden seL4-Kernel voraus — widerspricht dem Ziel
-  eines eigenständigen Kernels. **Verworfen** als Kernelbasis (aber wertvolle
-  Referenz für `no_std`/IPC/Build-Konventionen).
+- **+** Existing build mechanics (build-std, custom target) are proven.
+- **−** Presupposes an underlying seL4 kernel — contradicts the goal
+  of a standalone kernel. **Rejected** as a kernel base (but a valuable
+  reference for `no_std`/IPC/build conventions).
 
-### C) U-Boot / EFI-Boot
-- **−** Unnötige Komplexität für die QEMU-`virt`-Zielumgebung. Verworfen.
+### C) U-Boot / EFI boot
+- **−** Unnecessary complexity for the QEMU `virt` target environment. Rejected.
 
-## Entscheidung
+## Decision
 
-- **Toolchain:** rustup `nightly` (hier 1.98.0), gepinnt via `rust-toolchain.toml`
-  mit den Komponenten `rust-src`, `rustfmt`, `llvm-tools`. Nightly ist nötig für
-  `-Z build-std` (es gibt kein vorkompiliertes `core`/`alloc` für ein
-  freistehendes Target). `/usr/bin/cargo` ist auf diesem System ein
-  rustup-Proxy, daher greift das Pinning automatisch.
-- **Target:** custom JSON-Spec `targets/aarch64-caprock.json`
+- **Toolchain:** rustup `nightly` (here 1.98.0), pinned via `rust-toolchain.toml`
+  with the components `rust-src`, `rustfmt`, `llvm-tools`. Nightly is needed for
+  `-Z build-std` (there is no precompiled `core`/`alloc` for a
+  freestanding target). `/usr/bin/cargo` is a
+  rustup proxy on this system, so the pinning takes effect automatically.
+- **Target:** custom JSON spec `targets/aarch64-caprock.json`
   (`llvm-target: aarch64-unknown-none`, `panic-strategy: abort`,
-  `relocation-model: static`, `+strict-align`, `rust-lld` als Linker). Neuere
-  Nightlies verlangen zusätzlich `-Z json-target-spec` (in `.cargo/config.toml`).
-- **build-std:** `core, alloc, compiler_builtins` mit
-  `compiler-builtins-mem` (liefert `memcpy`/`memset` etc. ohne libc).
-- **Linker-Script:** `kernel/linker.ld`, Ladeadresse `0x4008_0000` (QEMU-`virt`-
-  Konvention; RAM ab `0x4000_0000`). Drei LOAD-Segmente (RX/R/RW), `.bss` als
-  `NOLOAD`, 64 KiB Boot-Stack im `.bss`-Bereich.
-- **FP/NEON:** bleiben aktiviert. rustc koppelt `fp-armv8` an `neon` an die ABI;
-  das Deaktivieren wird ausgemustert. Der Kernel verwendet selbst kein
-  Fließkomma; FP/SIMD-Zustand wird erst beim Kontextwechsel (lazy) behandelt.
+  `relocation-model: static`, `+strict-align`, `rust-lld` as linker). Newer
+  nightlies additionally require `-Z json-target-spec` (in `.cargo/config.toml`).
+- **build-std:** `core, alloc, compiler_builtins` with
+  `compiler-builtins-mem` (supplies `memcpy`/`memset` etc. without libc).
+- **Linker script:** `kernel/linker.ld`, load address `0x4008_0000` (QEMU `virt`
+  convention; RAM from `0x4000_0000`). Three LOAD segments (RX/R/RW), `.bss` as
+  `NOLOAD`, 64 KiB boot stack in the `.bss` area.
+- **FP/NEON:** stay enabled. rustc ties `fp-armv8` to `neon` in the ABI;
+  disabling is being phased out. The kernel itself uses no
+  floating point; FP/SIMD state is only handled (lazily) at context switch.
 
-## Sicherheitsauswirkungen
+## Security implications
 
-`panic = abort` (kein Unwinding → keine Landing-Pads, kleinere Angriffsfläche).
-`relocation-model = static` (keine GOT/PLT-Indirektion zur Laufzeit).
-`+strict-align` ist nötig, solange die MMU aus ist (alle Zugriffe sind
-Device-typisiert und müssen ausgerichtet sein) — siehe [ADR 0002](0002-no-virtual-memory-sas.md).
+`panic = abort` (no unwinding → no landing pads, smaller attack surface).
+`relocation-model = static` (no GOT/PLT indirection at run time).
+`+strict-align` is necessary as long as the MMU is off (all accesses are
+device-typed and must be aligned) — see [ADR 0002](0002-no-virtual-memory-sas.md).
 
-## Performanceauswirkungen
+## Performance implications
 
-`build-std` erlaubt später, `core` mit denselben CPU-Features/Opt-Level wie den
-Kernel zu bauen (z. B. spezifische `target-cpu`). LTO ist als `thin` aktiviert.
-Solange die MMU aus ist (nur Phase 0), läuft alles uncached und damit langsam —
-in Phase 1 wird eine Identity-Map mit aktivierten Caches eingeführt.
+`build-std` later allows building `core` with the same CPU features/opt level as the
+kernel (e.g. a specific `target-cpu`). LTO is enabled as `thin`.
+As long as the MMU is off (phase 0 only), everything runs uncached and thus slowly —
+in phase 1 an identity map with enabled caches is introduced.
 
-## Bauen & Starten
+## Building & starting
 
 ```sh
 ./build.sh        # rustup run nightly cargo build --release
 ./run-qemu.sh     # qemu-system-aarch64 -machine virt -cpu cortex-a72 -smp 8 -m 4G ...
 ```
 
-Artefakt: `build/target/aarch64-caprock/release/caprock-kernel.elf`.
+Artefact: `build/target/aarch64-caprock/release/caprock-kernel.elf`.

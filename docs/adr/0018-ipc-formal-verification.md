@@ -1,35 +1,35 @@
-# ADR 0018 — Formale funktionale Verifikation der IPC (Verus, Phase 4)
+# ADR 0018 — Formal functional verification of IPC (Verus, phase 4)
 
-Status: **angenommen** · Datum: 2026-06-27 · Phase 4 der funktionalen Verifikation.
-Bezug: ADR 0015 (Verifikationsansatz), `Verification/ipc/`, Laufzeit-`ipc_audit`.
+Status: **accepted** · Date: 2026-06-27 · Phase 4 of functional verification.
+Reference: ADR 0015 (verification approach), `Verification/ipc/`, run-time `ipc_audit`.
 
-## Kontext
+## Context
 
-IPC ist der einzige erlaubte Kommunikationskanal isolierter PDs. Die Korrektheit des CALL/REPLY-
-Rendezvous + die Konsistenz der Endpoint-Warteschlangen (kein Nachrichtenverlust, keine Duplikate)
-sind sicherheitskritisch. Zur Laufzeit prueft das `ipc_audit` + der IPC-Fuzzer; Phase 4 **beweist** das
-sequentielle Protokollmodell. **Nebenlaeufigkeit** (gleichzeitige Mehrkern-Zugriffe) bleibt **ausserhalb**
-(durch die `CAPS`/`EPS`-Locks serialisiert — Concurrency-/HAL-TCB, vgl. ADR 0015 + die Kani-Sync-Grenze).
+IPC is the only permitted communication channel of isolated PDs. The correctness of the CALL/REPLY
+rendezvous + the consistency of the endpoint queues (no message loss, no duplicates)
+are security-critical. At run time `ipc_audit` + the IPC fuzzer check this; phase 4 **proves** the
+sequential protocol model. **Concurrency** (simultaneous multi-core accesses) stays **outside**
+(serialised by the `CAPS`/`EPS` locks — concurrency/HAL TCB, cf. ADR 0015 + the Kani sync boundary).
 
-## Variantenvergleich
+## Comparison of variants
 
-| Variante | Beschreibung | Bewertung |
+| Variant | Description | Assessment |
 |---|---|---|
-| V1 nebenlaeufiges Modell (Interleavings) | gleichzeitige Sender/Empfaenger auf mehreren Kernen | Verus ist single-threaded; braucht Loom/TLA+ -> ausserhalb (s. ADR 0015) |
-| **V2 sequentielles Protokoll (gewählt)** | Endpoint als Sender-/Empfaenger-Queues; `send`/`recv`/(`reply`) als Zustandsuebergaenge | erfasst die Kern-Invariante (Rendezvous-Ausschluss, kein Verlust/Duplikat, Fortschritt); klein + faithful zur serialisierten Realitaet |
+| V1 concurrent model (interleavings) | simultaneous senders/receivers on several cores | Verus is single-threaded; needs Loom/TLA+ -> outside (see ADR 0015) |
+| **V2 sequential protocol (chosen)** | endpoint as sender/receiver queues; `send`/`recv`/(`reply`) as state transitions | captures the core invariant (rendezvous exclusion, no loss/duplicate, progress); small + faithful to the serialised reality |
 
-## Entscheidung
+## Decision
 
-**V2** — das sequentielle Endpoint-Protokoll modellieren und beweisen: (1) **Rendezvous-Ausschluss**
-(`send`/`recv` erhalten „nie Sender **und** Empfaenger zugleich blockiert"); (2) **kein
-Nachrichtenverlust/keine Duplizierung** (`send` erhoeht die Gesamtzahl um genau 1; `recv` stellt eine
-anstehende Nachricht **genau einmal** zu); (3) **Rendezvous-Fortschritt** (bei vorhandenem Partner
-sofortige Zustellung, kein Deadlock). Abstraktes Modell; realer Code unveraendert.
+**V2** — model and prove the sequential endpoint protocol: (1) **rendezvous exclusion**
+(`send`/`recv` preserve "never sender **and** receiver blocked at the same time"); (2) **no
+message loss/no duplication** (`send` raises the total by exactly 1; `recv` delivers a
+pending message **exactly once**); (3) **rendezvous progress** (with a partner present,
+immediate delivery, no deadlock). Abstract model; real code unchanged.
 
-## Konsequenzen
+## Consequences
 
-- **Positiv:** das CALL/REPLY-Kernprotokoll (Endpoint-Konsistenz, Nachrichten-Erhaltung, Fortschritt)
-  ist bewiesen, ergaenzt `ipc_audit` + den IPC-Fuzzer.
-- **Grenzen/offen:** **Reply-Caps** (eine ausstehende Antwort gehoert zu genau einem Aufrufer) +
-  Reply-Liveness (ERR_SERVER_GONE) + Cap-Transfer-in-IPC sind die naechsten Stufen; **Nebenlaeufigkeit**
-  bleibt ausdruecklich ausserhalb (Loom/TLA+/Concurrency-Logik, Hardware-Vertrauensgrenze).
+- **Positive:** the CALL/REPLY core protocol (endpoint consistency, message preservation, progress)
+  is proved, complements `ipc_audit` + the IPC fuzzer.
+- **Limits/open:** **reply caps** (an outstanding reply belongs to exactly one caller) +
+  reply liveness (ERR_SERVER_GONE) + cap transfer in IPC are the next stages; **concurrency**
+  stays expressly outside (Loom/TLA+/concurrency logic, hardware trust boundary).

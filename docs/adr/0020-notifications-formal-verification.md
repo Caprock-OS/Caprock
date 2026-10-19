@@ -1,41 +1,41 @@
-# ADR 0020 — Formale funktionale Verifikation der Notifications (Verus, Phase 6)
+# ADR 0020 — Formal functional verification of notifications (Verus, phase 6)
 
-Status: **angenommen** · Datum: 2026-06-27 · Phase 6 der funktionalen Verifikation (weitere Komponente).
-Bezug: ADR 0015 (Verifikationsansatz), ADR 0018 (IPC), `Verification/notifications/`,
-Laufzeit-`Notification::audit`.
+Status: **accepted** · Date: 2026-06-27 · Phase 6 of functional verification (further component).
+Reference: ADR 0015 (verification approach), ADR 0018 (IPC), `Verification/notifications/`,
+run-time `Notification::audit`.
 
-## Kontext
+## Context
 
-Notifications sind der **asynchrone**, nicht-blockierende Signalkanal (Badge-akkumulierte Ereignisse,
-u. a. die Deferred-IRQ-Zustellung an HardwareLand-Backends). Sie ergänzen das synchrone IPC (ADR 0018):
-ein `signal` ODERt Badge-Bits ins pending-Wort und weckt einen etwaigen Wartenden; ein `wait` holt das
-Wort ab oder blockiert. Geht ein Signal verloren oder bleibt ein Wartender trotz anstehender Signale
-blockiert (Lost-Wakeup), ist der Kanal fehlerhaft. Zur Laufzeit prueft `Notification::audit` (toter
-Wartender) + der Fuzzer; Phase 6 **beweist** das sequentielle Signal-/Wait-Protokoll.
-**Nebenlaeufigkeit** + kern-uebergreifendes Wecken (`unblock`+IPI) bleiben **ausserhalb** (Concurrency-/
-HAL-TCB, ADR 0015).
+Notifications are the **asynchronous**, non-blocking signal channel (badge-accumulated events,
+among others the deferred IRQ delivery to HardwareLand backends). They complement synchronous IPC (ADR 0018):
+a `signal` ORs badge bits into the pending word and wakes any waiter; a `wait` fetches the
+word or blocks. If a signal is lost or a waiter stays blocked despite pending signals
+(lost wakeup), the channel is faulty. At run time `Notification::audit` (dead
+waiter) + the fuzzer check; phase 6 **proves** the sequential signal/wait protocol.
+**Concurrency** + cross-core waking (`unblock`+IPI) stay **outside** (concurrency/
+HAL TCB, ADR 0015).
 
-## Variantenvergleich
+## Comparison of variants
 
-| Variante | Beschreibung | Bewertung |
+| Variant | Description | Assessment |
 |---|---|---|
-| V1 u64-Bitwort bitgenau | pending als `u64`, `signal`=`\|=`, Beweise per bit_vector | erzwingt den SMT-Bit-Vektor-Solver für jede Eigenschaft; viel Ballast, der Sicherheitsgewinn (Bit-Akkumulation) ist mengentheoretisch sauberer ausdrueckbar |
-| **V2 Badge-Bits als `Set<nat>` (gewählt)** | pending als Bit-Menge; `signal`=Vereinigung, `wait`=Drain | erfasst **genau** „kein Bit geht verloren / wird genau einmal konsumiert"; klein + faithful (ODER ≙ Vereinigung) |
+| V1 u64 bit word bit-exactly | pending as `u64`, `signal`=`\|=`, proofs via bit_vector | forces the SMT bit-vector solver for every property; much ballast, the security gain (bit accumulation) can be expressed more cleanly in set theory |
+| **V2 badge bits as `Set<nat>` (chosen)** | pending as a bit set; `signal`=union, `wait`=drain | captures **exactly** "no bit is lost / consumed exactly once"; small + faithful (OR ≙ union) |
 
-## Entscheidung
+## Decision
 
-**V2** — das sequentielle Notification-Protokoll modellieren und beweisen: (1) **Invariante**
-`waiter is Some ==> pending leer` (ein blockierter Wartender sitzt nie auf unzugestellten Signalen);
-(2) **kein Signalverlust** (jedes signalisierte Bit ist danach im pending-Wort **oder** an den
-geweckten Wartenden zugestellt); (3) **genau-einmal-Konsum** (`wait` holt das gesamte pending-Wort ab
-und leert es — kein Rest, kein Duplikat); (4) **Fortschritt** (bei anstehendem Wort blockiert `wait`
-nicht — kein Lost-Wakeup); `signal`/`wait`/`purge` erhalten die Invariante. Abstraktes Modell; realer
-Code unveraendert.
+**V2** — model and prove the sequential notification protocol: (1) **invariant**
+`waiter is Some ==> pending empty` (a blocked waiter never sits on undelivered signals);
+(2) **no signal loss** (every signalled bit is afterwards in the pending word **or** delivered to the
+woken waiter); (3) **exactly-once consumption** (`wait` fetches the entire pending word
+and empties it — no remainder, no duplicate); (4) **progress** (with a pending word, `wait` does not
+block — no lost wakeup); `signal`/`wait`/`purge` preserve the invariant. Abstract model; real
+code unchanged.
 
-## Konsequenzen
+## Consequences
 
-- **Positiv:** das Signal-/Wait-Kernprotokoll (kein Signalverlust, genau-einmal-Konsum, kein
-  Lost-Wakeup) ist bewiesen, ergaenzt `Notification::audit` + den Fuzzer.
-- **Grenzen/offen:** **mehrere Wartende** (aktuell ein Konsument je Notification), **Notification-
-  Binding an einen TCB** (gebundene Zustellung) und **Nebenlaeufigkeit** (kern-uebergreifendes
-  `unblock`+IPI) bleiben ausdruecklich ausserhalb (Folgestufen bzw. HW-TCB).
+- **Positive:** the signal/wait core protocol (no signal loss, exactly-once consumption, no
+  lost wakeup) is proved, complements `Notification::audit` + the fuzzer.
+- **Limits/open:** **multiple waiters** (currently one consumer per notification), **notification
+  binding to a TCB** (bound delivery) and **concurrency** (cross-core
+  `unblock`+IPI) remain expressly outside (follow-up stages or HW TCB).

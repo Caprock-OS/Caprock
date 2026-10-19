@@ -1,226 +1,226 @@
-# Caprock — Architekturübersicht
+# Caprock — Architecture overview
 
-Caprock ist ein eigenständiger, capability-basierter Microkernel in Rust,
-inspiriert von seL4 und der seL4-Microkit-Laufzeit, aber mit einem bewusst
-anderen Speichermodell. Ziel ist ein Betriebssystem, das zugleich
-**hochsicher, hochperformant, capability-basiert, deterministisch und vollständig
-modular** ist.
+Caprock is a standalone, capability-based microkernel in Rust,
+inspired by seL4 and the seL4 Microkit runtime, but with a deliberately
+different memory model. The goal is an operating system that is at once
+**highly secure, high-performance, capability-based, deterministic and fully
+modular**.
 
-Dieses Dokument gibt den Gesamtüberblick. Begründete Einzelentscheidungen liegen
-als ADRs (Architecture Decision Records) unter [`adr/`](adr/). Die Analyse des
-seL4-Quellcodes (als Referenz, *nicht* als Fork-Basis) liegt in
+This document gives the overall overview. Reasoned individual decisions are kept
+as ADRs (architecture decision records) under [`adr/`](adr/). The analysis of the
+seL4 source code (as a reference, *not* as a fork base) is in
 [`seL4-architecture-map.md`](seL4-architecture-map.md).
 
 ---
 
-## 1. Leitidee
+## 1. Guiding idea
 
-Drei existierende Systeme bilden die geistige Grundlage:
+Three existing systems form the intellectual foundation:
 
-| System | Was wir übernehmen | Was wir anders machen |
+| System | What we adopt | What we do differently |
 |--------|--------------------|------------------------|
-| **seL4** | Capability-Modell, Endpoint/Notification-IPC, Untyped-Speicher, Fastpath, deterministische Kernelstruktur | Kein per-Prozess-VSpace/MMU-Isolation; Rust statt C; kein bewiesener, aber unsicherer C-Kern |
-| **seL4 Microkit** | Protection-Domain-Modell, Channels, statisches Systemlayout, schlanke Runtime | Microkit-Runtime wird Teil des Kernelimages; Komponenten sind hot-reloadbar |
-| **Theseus OS** | Single-Address-Space (SAS), Speichersicherheit *intralingual* durch Rust, Live-Austausch von Modulen | Zusätzlich explizites seL4-Capability-Modell als Autoritätsschicht |
+| **seL4** | capability model, endpoint/notification IPC, untyped memory, fastpath, deterministic kernel structure | no per-process VSpace/MMU isolation; Rust instead of C; no proved, but unsafe C core |
+| **seL4 Microkit** | protection domain model, channels, static system layout, lean runtime | the Microkit runtime becomes part of the kernel image; components are hot-reloadable |
+| **Theseus OS** | single address space (SAS), memory safety *intralingual* through Rust, live replacement of modules | additionally an explicit seL4 capability model as the authority layer |
 
-Der zentrale, definierende Unterschied zu seL4: **Caprock nutzt keine
-per-Prozess-Adressräume und keine MMU-basierte Speicherisolation**. Jede Adresse
-ist eine echte physische Adresse. Speichersicherheit entsteht aus zwei sich
-ergänzenden Mechanismen — der Rust-Typsicherheit (verhindert Speicherfehler
-*innerhalb* einer Komponente) und Capabilities (regeln Autorität *zwischen*
-Komponenten). Details und Konsequenzen: [ADR 0002](adr/0002-no-virtual-memory-sas.md).
+The central, defining difference from seL4: **Caprock uses no
+per-process address spaces and no MMU-based memory isolation**. Every address
+is a real physical address. Memory safety arises from two complementary
+mechanisms — Rust type safety (prevents memory errors
+*within* a component) and capabilities (govern authority *between*
+components). Details and consequences: [ADR 0002](adr/0002-no-virtual-memory-sas.md).
 
 ---
 
-## 2. Was im Kernelimage liegt — und was nicht
+## 2. What is in the kernel image — and what is not
 
-**Im Kernelimage (Trusted Computing Base):**
+**In the kernel image (trusted computing base):**
 
-- Microkernel-Kern (Boot, Traps, Scheduling-Schleife)
-- Capability-System
-- Scheduler
-- IPC-System (Endpoints, Notifications, Reply)
-- Microkit-Runtime (PD-/Channel-Modell)
+- microkernel core (boot, traps, scheduling loop)
+- capability system
+- scheduler
+- IPC system (endpoints, notifications, reply)
+- Microkit runtime (PD/channel model)
 
-**Nicht im Kernelimage** (laufen als Userland-Komponenten, hot-reloadbar):
+**Not in the kernel image** (run as userland components, hot-reloadable):
 
-Strukturierte Karte des seL4-C-Kernels unter
-`/home/simon/Dokumente/Caprock/seL4/src`. **Referenz, kein Fork-Vorbild zum
-Kopieren** — sie dient dazu, bewährte Muster für die Rust-Neuimplementierung zu
-verstehen. Pfade sind relativ zu `seL4/src` (Header teils unter `seL4/include`).
+Structured map of the seL4 C kernel under
+`/home/simon/Dokumente/Caprock/seL4/src`. **Reference, no fork model to
+copy** — it serves to understand proven patterns for the Rust
+re-implementation. Paths are relative to `seL4/src` (headers partly under `seL4/include`).
 
-## Top-Level-Subsysteme
+## Top-level subsystems
 
-| Verzeichnis | Rolle | Umfang |
+| Directory | Role | Size |
 |-------------|-------|--------|
-| `api/` | Syscall-Eintritt, Fault-Behandlung | ~36K |
-| `kernel/` | Kernlogik: Boot, Threads, Scheduling, cspace | ~104K |
-| `object/` | Kernel-Objekte (TCB, Endpoint, CNode, …) | ~232K |
-| `fastpath/` | Optimierter IPC-Hot-Path | ~36K |
-| `machine/` | HW-Abstraktion: IO, FPU, Profiling | ~56K |
-| `arch/` | Architekturspezifisch (ARM/x86/RISC-V) | ~1.7M |
-Strukturierte Karte des seL4-C-Kernels unter
-`/home/simon/Dokumente/Caprock/seL4/src`. **Referenz, kein Fork-Vorbild zum
-Kopieren** — sie dient dazu, bewährte Muster für die Rust-Neuimplementierung zu
-verstehen. Pfade sind relativ zu `seL4/src` (Header teils unter `seL4/include`).
+| `api/` | syscall entry, fault handling | ~36K |
+| `kernel/` | core logic: boot, threads, scheduling, cspace | ~104K |
+| `object/` | kernel objects (TCB, endpoint, CNode, …) | ~232K |
+| `fastpath/` | optimised IPC hot path | ~36K |
+| `machine/` | HW abstraction: IO, FPU, profiling | ~56K |
+| `arch/` | architecture-specific (ARM/x86/RISC-V) | ~1.7M |
+Structured map of the seL4 C kernel under
+`/home/simon/Dokumente/Caprock/seL4/src`. **Reference, no fork model to
+copy** — it serves to understand proven patterns for the Rust
+re-implementation. Paths are relative to `seL4/src` (headers partly under `seL4/include`).
 
-## Top-Level-Subsysteme
+## Top-level subsystems
 
-| Verzeichnis | Rolle | Umfang |
+| Directory | Role | Size |
 |-------------|-------|--------|
-| `api/` | Syscall-Eintritt, Fault-Behandlung | ~36K |
-| `kernel/` | Kernlogik: Boot, Threads, Scheduling, cspace | ~104K |
-| `object/` | Kernel-Objekte (TCB, Endpoint, CNode, …) | ~232K |
-| `fastpath/` | Optimierter IPC-Hot-Path | ~36K |
-| `machine/` | HW-Abstraktion: IO, FPU, Profiling | ~56K |
-| `arch/` | Architekturspezifisch (ARM/x86/RISC-V) | ~1.7M |
-| `plat/` | Plattform-Treiber/-Config (40+ Plattformen) | ~716K |
-| `drivers/` | Timer, UART, IRQ, SMMU | ~136K |
-| `smp/` | SMP: IPI, Inter-Core-Locking | ~16K |
-| `model/` | Scheduler-Datenstrukturen/-Zustand | ~16K |
+| `api/` | syscall entry, fault handling | ~36K |
+| `kernel/` | core logic: boot, threads, scheduling, cspace | ~104K |
+| `object/` | kernel objects (TCB, endpoint, CNode, …) | ~232K |
+| `fastpath/` | optimised IPC hot path | ~36K |
+| `machine/` | HW abstraction: IO, FPU, profiling | ~56K |
+| `arch/` | architecture-specific (ARM/x86/RISC-V) | ~1.7M |
+| `plat/` | platform drivers/config (40+ platforms) | ~716K |
+| `drivers/` | timer, UART, IRQ, SMMU | ~136K |
+| `smp/` | SMP: IPI, inter-core locking | ~16K |
+| `model/` | scheduler data structures/state | ~16K |
 
-Kernbeobachtung: Der Kern (`api/`, `kernel/`, `object/`) ist relativ
-architekturunabhängig; `arch/`+`plat/` (~2.4M) tragen die Hardware-Spezifik.
+Key observation: the core (`api/`, `kernel/`, `object/`) is relatively
+architecture-independent; `arch/`+`plat/` (~2.4M) carry the hardware specifics.
 
-## Capability-System
+## Capability system
 
 - `include/object/cap.h`, `include/object/structures.h`,
-  `include/object/cnode.h`; Implementierung in `kernel/cspace.c`, `object/cnode.c`.
-- **CTE** = `cap_t` + `mdb_node_t` (Cap + Ableitungs-Metadaten).
-- **CNodes**: dynamisch dimensionierte CTE-Tabellen, radix-/guard-adressiert
-  (mehrstufiger Lookup wie ein Page-Table-Walk).
-- **CDT/MDB**: Eltern-Kind-Beziehungen der Ableitungen → Basis für Revocation.
-- Operationen: `invokeCNodeInsert/Move/Revoke/Delete`, `cteRevoke/Delete/Move`,
+  `include/object/cnode.h`; implementation in `kernel/cspace.c`, `object/cnode.c`.
+- **CTE** = `cap_t` + `mdb_node_t` (cap + derivation metadata).
+- **CNodes**: dynamically sized CTE tables, radix/guard-addressed
+  (multi-level lookup like a page-table walk).
+- **CDT/MDB**: parent-child relationships of the derivations → basis for revocation.
+- Operations: `invokeCNodeInsert/Move/Revoke/Delete`, `cteRevoke/Delete/Move`,
   `isMDBParentOf`, `isFinalCapability`.
 
 ## IPC
 
-- `include/object/endpoint.h|notification.h|reply.h`; Impl. in
+- `include/object/endpoint.h|notification.h|reply.h`; impl. in
   `object/endpoint.c`, `object/notification.c`, `fastpath/fastpath.c`.
-- Endpoint-Zustände: `Idle/Send/Recv`. Notification: `Idle/Waiting/Active(Badge)`.
-- Syscall-Pfad: `api/syscall.c` → `handleSyscall` → `handleInvocation` →
-  `decodeInvocation` (`object/objecttype.c`) → objekt-spezifischer Handler.
-- Fastpath (`fastpath/fastpath.c`): bei erfüllten Bedingungen (kein Fault,
-  Send-Recht, Empfänger bereit, Prio passend) direkter Übergang, sonst `slowpath`.
-- Syscall-Typen: `Call, ReplyRecv, NBSendRecv, Recv, NBRecv, Send, Yield, Interrupt`.
+- Endpoint states: `Idle/Send/Recv`. Notification: `Idle/Waiting/Active(Badge)`.
+- Syscall path: `api/syscall.c` → `handleSyscall` → `handleInvocation` →
+  `decodeInvocation` (`object/objecttype.c`) → object-specific handler.
+- Fastpath (`fastpath/fastpath.c`): when conditions are met (no fault,
+  send right, receiver ready, priority fits) direct transition, otherwise `slowpath`.
+- Syscall types: `Call, ReplyRecv, NBSendRecv, Recv, NBRecv, Send, Yield, Interrupt`.
 
 ## Scheduler
 
 - `model/statedata.h`, `kernel/thread.h`, `kernel/thread.c`, `object/tcb.c`.
-- Klassisch: Ready-Queues `[domain][priority]` + L1/L2-Bitmap (O(1)-Auswahl),
-  Round-Robin-Domänen (`ksDomSchedule`, `ksCurDomain`, `ksDomainTime`).
-- MCS: `object/schedcontext.c`, `kernel/sporadic.h` — Scheduling-Contexts mit
-  Budget + Sporadic-Server-Refill (`scRefillHead/Tail`), Budget-Donation bei Reply.
-- SMP: pro-Kern-Zustand via `NODE_STATE(...)`, Reschedule per IPI (`smp/ipi.c`).
-- Kernfunktionen: `schedule`, `scheduleChooseNewThread`,
+- Classic: ready queues `[domain][priority]` + L1/L2 bitmap (O(1) selection),
+  round-robin domains (`ksDomSchedule`, `ksCurDomain`, `ksDomainTime`).
+- MCS: `object/schedcontext.c`, `kernel/sporadic.h` — scheduling contexts with
+  budget + sporadic-server refill (`scRefillHead/Tail`), budget donation on reply.
+- SMP: per-core state via `NODE_STATE(...)`, reschedule per IPI (`smp/ipi.c`).
+- Core functions: `schedule`, `scheduleChooseNewThread`,
   `tcbSchedEnqueue/Append/Dequeue`, `rescheduleRequired`.
 
-## Untyped-Speichermodell
+## Untyped memory model
 
 - `include/object/untyped.h`, `object/untyped.c`, `object/objecttype.c`,
   `kernel/boot.c`.
-- Alle Kernel-Objekte entstehen aus **Untyped** via `invokeUntyped_Retype`:
-  validiert leere Ziel-Slots, teilt die Region, erzeugt Caps, trackt
-  `capFreeIndex`. Objekte haben feste oder variable Größen (Bits).
-- Finalisierung (`finaliseCap`): letzte Cap gelöscht → Aufräumen (Endpoint-IPC
-  abbrechen, TCB entbinden); **Zombie-Caps** für lange, unterbrechbare Revokes.
+- All kernel objects arise from **untyped** via `invokeUntyped_Retype`:
+  validates empty target slots, splits the region, creates caps, tracks
+  `capFreeIndex`. Objects have fixed or variable sizes (bits).
+- Finalisation (`finaliseCap`): last cap deleted → clean-up (abort endpoint IPC,
+  unbind TCB); **zombie caps** for long, interruptible revokes.
 
-## aarch64-Spezifika
+## aarch64 specifics
 
-- `arch/arm/64/head.S` (Boot-Entry), `traps.S` (Vektoren/Handler),
-  `c_traps.c` (C-Dispatch), `kernel/thread.c` (Kontextwechsel),
-  `kernel/vspace.c` (MMU/Page-Tables/ASID — in Caprock **entfällt** der
-  per-Prozess-Teil, ADR 0002), `machine/registerset.c`, `machine/fpu.c`.
-- Boot: MMU-aus-Entry → Boot-Page-Tables → MMU an → `init_kernel` → Rootserver.
+- `arch/arm/64/head.S` (boot entry), `traps.S` (vectors/handlers),
+  `c_traps.c` (C dispatch), `kernel/thread.c` (context switch),
+  `kernel/vspace.c` (MMU/page tables/ASID — in Caprock the
+  per-process part is **dropped**, ADR 0002), `machine/registerset.c`, `machine/fpu.c`.
+- Boot: MMU-off entry → boot page tables → MMU on → `init_kernel` → root server.
 
-## Konsequenzen für Caprock
+## Consequences for Caprock
 
-Übernommen werden die *Konzepte* (Caps/CDT, Endpoint/Notification/Reply,
-Bitmap-Scheduler, Retype-Idee), neu sind: Rust statt C, **kein per-Prozess-VSpace**
-(ADR 0002), Zero-Copy-IPC im SAS (ADR 0004), Index-Arena-CDT statt Zeiger-MDB
-(ADR 0003), Hot-Reload über stabile Cap-Identität (ADR 0006).
+The *concepts* are adopted (caps/CDT, endpoint/notification/reply,
+bitmap scheduler, retype idea); new are: Rust instead of C, **no per-process VSpace**
+(ADR 0002), zero-copy IPC in the SAS (ADR 0004), index-arena CDT instead of pointer MDB
+(ADR 0003), hot reload via stable cap identity (ADR 0006).
 
-| `plat/` | Plattform-Treiber/-Config (40+ Plattformen) | ~716K |
-| `drivers/` | Timer, UART, IRQ, SMMU | ~136K |
-| `smp/` | SMP: IPI, Inter-Core-Locking | ~16K |
-| `model/` | Scheduler-Datenstrukturen/-Zustand | ~16K |
+| `plat/` | platform drivers/config (40+ platforms) | ~716K |
+| `drivers/` | timer, UART, IRQ, SMMU | ~136K |
+| `smp/` | SMP: IPI, inter-core locking | ~16K |
+| `model/` | scheduler data structures/state | ~16K |
 
-Kernbeobachtung: Der Kern (`api/`, `kernel/`, `object/`) ist relativ
-architekturunabhängig; `arch/`+`plat/` (~2.4M) tragen die Hardware-Spezifik.
+Key observation: the core (`api/`, `kernel/`, `object/`) is relatively
+architecture-independent; `arch/`+`plat/` (~2.4M) carry the hardware specifics.
 
-## Capability-System
+## Capability system
 
 - `include/object/cap.h`, `include/object/structures.h`,
-  `include/object/cnode.h`; Implementierung in `kernel/cspace.c`, `object/cnode.c`.
-- **CTE** = `cap_t` + `mdb_node_t` (Cap + Ableitungs-Metadaten).
-- **CNodes**: dynamisch dimensionierte CTE-Tabellen, radix-/guard-adressiert
-  (mehrstufiger Lookup wie ein Page-Table-Walk).
-- **CDT/MDB**: Eltern-Kind-Beziehungen der Ableitungen → Basis für Revocation.
-- Operationen: `invokeCNodeInsert/Move/Revoke/Delete`, `cteRevoke/Delete/Move`,
+  `include/object/cnode.h`; implementation in `kernel/cspace.c`, `object/cnode.c`.
+- **CTE** = `cap_t` + `mdb_node_t` (cap + derivation metadata).
+- **CNodes**: dynamically sized CTE tables, radix/guard-addressed
+  (multi-level lookup like a page-table walk).
+- **CDT/MDB**: parent-child relationships of the derivations → basis for revocation.
+- Operations: `invokeCNodeInsert/Move/Revoke/Delete`, `cteRevoke/Delete/Move`,
   `isMDBParentOf`, `isFinalCapability`.
 
 ## IPC
 
-- `include/object/endpoint.h|notification.h|reply.h`; Impl. in
+- `include/object/endpoint.h|notification.h|reply.h`; impl. in
   `object/endpoint.c`, `object/notification.c`, `fastpath/fastpath.c`.
-- Endpoint-Zustände: `Idle/Send/Recv`. Notification: `Idle/Waiting/Active(Badge)`.
-- Syscall-Pfad: `api/syscall.c` → `handleSyscall` → `handleInvocation` →
-  `decodeInvocation` (`object/objecttype.c`) → objekt-spezifischer Handler.
-- Fastpath (`fastpath/fastpath.c`): bei erfüllten Bedingungen (kein Fault,
-  Send-Recht, Empfänger bereit, Prio passend) direkter Übergang, sonst `slowpath`.
-- Syscall-Typen: `Call, ReplyRecv, NBSendRecv, Recv, NBRecv, Send, Yield, Interrupt`.
+- Endpoint states: `Idle/Send/Recv`. Notification: `Idle/Waiting/Active(Badge)`.
+- Syscall path: `api/syscall.c` → `handleSyscall` → `handleInvocation` →
+  `decodeInvocation` (`object/objecttype.c`) → object-specific handler.
+- Fastpath (`fastpath/fastpath.c`): when conditions are met (no fault,
+  send right, receiver ready, priority fits) direct transition, otherwise `slowpath`.
+- Syscall types: `Call, ReplyRecv, NBSendRecv, Recv, NBRecv, Send, Yield, Interrupt`.
 
 ## Scheduler
 
 - `model/statedata.h`, `kernel/thread.h`, `kernel/thread.c`, `object/tcb.c`.
-- Klassisch: Ready-Queues `[domain][priority]` + L1/L2-Bitmap (O(1)-Auswahl),
-  Round-Robin-Domänen (`ksDomSchedule`, `ksCurDomain`, `ksDomainTime`).
-- MCS: `object/schedcontext.c`, `kernel/sporadic.h` — Scheduling-Contexts mit
-  Budget + Sporadic-Server-Refill (`scRefillHead/Tail`), Budget-Donation bei Reply.
-- SMP: pro-Kern-Zustand via `NODE_STATE(...)`, Reschedule per IPI (`smp/ipi.c`).
-- Kernfunktionen: `schedule`, `scheduleChooseNewThread`,
+- Classic: ready queues `[domain][priority]` + L1/L2 bitmap (O(1) selection),
+  round-robin domains (`ksDomSchedule`, `ksCurDomain`, `ksDomainTime`).
+- MCS: `object/schedcontext.c`, `kernel/sporadic.h` — scheduling contexts with
+  budget + sporadic-server refill (`scRefillHead/Tail`), budget donation on reply.
+- SMP: per-core state via `NODE_STATE(...)`, reschedule per IPI (`smp/ipi.c`).
+- Core functions: `schedule`, `scheduleChooseNewThread`,
   `tcbSchedEnqueue/Append/Dequeue`, `rescheduleRequired`.
 
-## Untyped-Speichermodell
+## Untyped memory model
 
 - `include/object/untyped.h`, `object/untyped.c`, `object/objecttype.c`,
   `kernel/boot.c`.
-- Alle Kernel-Objekte entstehen aus **Untyped** via `invokeUntyped_Retype`:
-  validiert leere Ziel-Slots, teilt die Region, erzeugt Caps, trackt
-  `capFreeIndex`. Objekte haben feste oder variable Größen (Bits).
-- Finalisierung (`finaliseCap`): letzte Cap gelöscht → Aufräumen (Endpoint-IPC
-  abbrechen, TCB entbinden); **Zombie-Caps** für lange, unterbrechbare Revokes.
+- All kernel objects arise from **untyped** via `invokeUntyped_Retype`:
+  validates empty target slots, splits the region, creates caps, tracks
+  `capFreeIndex`. Objects have fixed or variable sizes (bits).
+- Finalisation (`finaliseCap`): last cap deleted → clean-up (abort endpoint IPC,
+  unbind TCB); **zombie caps** for long, interruptible revokes.
 
-## aarch64-Spezifika
+## aarch64 specifics
 
-- `arch/arm/64/head.S` (Boot-Entry), `traps.S` (Vektoren/Handler),
-  `c_traps.c` (C-Dispatch), `kernel/thread.c` (Kontextwechsel),
-  `kernel/vspace.c` (MMU/Page-Tables/ASID — in Caprock **entfällt** der
-  per-Prozess-Teil, ADR 0002), `machine/registerset.c`, `machine/fpu.c`.
-- Boot: MMU-aus-Entry → Boot-Page-Tables → MMU an → `init_kernel` → Rootserver.
+- `arch/arm/64/head.S` (boot entry), `traps.S` (vectors/handlers),
+  `c_traps.c` (C dispatch), `kernel/thread.c` (context switch),
+  `kernel/vspace.c` (MMU/page tables/ASID — in Caprock the
+  per-process part is **dropped**, ADR 0002), `machine/registerset.c`, `machine/fpu.c`.
+- Boot: MMU-off entry → boot page tables → MMU on → `init_kernel` → root server.
 
-## Konsequenzen für Caprock
+## Consequences for Caprock
 
-Übernommen werden die *Konzepte* (Caps/CDT, Endpoint/Notification/Reply,
-Bitmap-Scheduler, Retype-Idee), neu sind: Rust statt C, **kein per-Prozess-VSpace**
-(ADR 0002), Zero-Copy-IPC im SAS (ADR 0004), Index-Arena-CDT statt Zeiger-MDB
-(ADR 0003), Hot-Reload über stabile Cap-Identität (ADR 0006).
+The *concepts* are adopted (caps/CDT, endpoint/notification/reply,
+bitmap scheduler, retype idea); new are: Rust instead of C, **no per-process VSpace**
+(ADR 0002), zero-copy IPC in the SAS (ADR 0004), index-arena CDT instead of pointer MDB
+(ADR 0003), hot reload via stable cap identity (ADR 0006).
 
-- Treiber, Netzwerkstack, Dateisysteme, USB, GUI
-- Systemdienste, Device-Manager, Shell, Logging
+- drivers, network stack, file systems, USB, GUI
+- system services, device manager, shell, logging
 
-Die einzige Geräteberührung im Kernel ist eine **Debug-Konsole** (PL011-UART)
-für die Bring-up-Phase — analog zu seL4s Debug-`printf`. Produktives Logging ist
-ein Userland-Dienst. Siehe [ADR 0006](adr/0006-hot-reload-architecture.md).
+The only device contact in the kernel is a **debug console** (PL011 UART)
+for the bring-up phase — analogous to seL4's debug `printf`. Productive logging is
+a userland service. See [ADR 0006](adr/0006-hot-reload-architecture.md).
 
 ---
 
-## 3. Geplante Crate-Struktur
+## 3. Planned crate structure
 
-Subsysteme werden erst als eigene Crate ausgegliedert, sobald sie echten Inhalt
-haben (keine leeren Abstraktionen auf Vorrat). Vorhanden nach Phase 6:
+Subsystems are split out as their own crate only once they have real content
+(no empty abstractions in stock). Present after phase 6:
 `kernel`, `crates/caprock-{sync, abi, hal, mem, cap, sched, ipc, microkit}`.
-Zielstruktur:
+Target structure:
 
 ```
 Caprock/
@@ -239,54 +239,54 @@ Caprock/
   targets/  docs/  build.sh  run-qemu.sh
 ```
 
-**Abhängigkeitsrichtung** (azyklisch, von unten nach oben):
+**Dependency direction** (acyclic, from bottom to top):
 `abi` → `sync` → `hal` → `mem` → `cap` → {`sched`, `ipc`} → `microkit` → `kernel`.
 
-Tiefe, schmale Interfaces (wenige, ausdrucksstarke APIs), keine parallelen
-Systeme mit gleicher Funktion, keine versteckten globalen Zustände.
+Deep, narrow interfaces (few, expressive APIs), no parallel
+systems with the same function, no hidden global state.
 
 ---
 
-## 4. Phasen-Roadmap
+## 4. Phase roadmap
 
-| Phase | Inhalt | Tests in QEMU |
+| Phase | Contents | Tests in QEMU |
 |------:|--------|---------------|
-| **0** ✅ | Bring-up: Boot, Sekundärkern-Parken, Stack/BSS, Debug-Konsole | Boottest |
-| **1** ✅ | HAL: Exception-Vektoren/Traps, GICv2, Generic Timer, **MMU als einzelne Identity-Map mit Caches an**, Ticket-Spinlock, SMP-Bring-up (PSCI/HVC) | Boot + Multicore-Boot (8/8) + Timer-Tick ✓ |
-| **2** ✅ | Physisches Speichermodell: lineare Memory-Capabilities, capability-basierter Allokator (Coalescing), Besitz/Transfer/Rückgabe/`split`/`restrict`; **W^X-Härtung** vorgezogen | Cap-Test (alloc/split/transfer/free) ✓ |
-| **3** ✅ | Capability-System-Kern: `CapSpace`, CDT, Objekt-Refcount + Finalisierung, Generations-Handles, copy/mint/move/delete/revoke | Cap-Test (Delegation/Revocation/Finalisierung) ✓ |
-| **4** ✅ | Threads + Scheduler: TCB, Kontextwechsel (SP-Tausch im Trap-Pfad), präemptiver Per-Kern-Round-Robin, Idle, Thread-Stacks aus dem Allokator | Scheduler-Test (Preemption, 3 Worker + Idle) ✓ |
-| **5** ✅ | IPC: synchrone Endpoints (Call/Recv/Reply), SVC-Syscall-Dispatch + ABI, Block/Unblock + Rendezvous-Direkt-Switch | IPC-Test (Call/Reply-Round-Trip) ✓ |
-| **6** ✅ | Microkit-Runtime im Image: Protection Domains mit eigenem Cap-Space, **cap-gesicherte IPC** (Endpoints als Caps, Rechte-Prüfung) | PD↔PD-IPC + Zugriff-verweigert-Test ✓ |
-| **7** ✅ | Hot-Reload: Server-Komponente im laufenden System ersetzen (Quiesce → Swap über stabile Endpoint-Cap), ohne Kernel-Neustart, transparent für Clients | Hot-Reload-Test (v1→v2, gleicher Endpoint) ✓ |
+| **0** ✅ | bring-up: boot, parking of secondary cores, stack/BSS, debug console | boot test |
+| **1** ✅ | HAL: exception vectors/traps, GICv2, generic timer, **MMU as a single identity map with caches on**, ticket spinlock, SMP bring-up (PSCI/HVC) | boot + multicore boot (8/8) + timer tick ✓ |
+| **2** ✅ | physical memory model: linear memory capabilities, capability-based allocator (coalescing), ownership/transfer/return/`split`/`restrict`; **W^X hardening** brought forward | cap test (alloc/split/transfer/free) ✓ |
+| **3** ✅ | capability system core: `CapSpace`, CDT, object refcount + finalisation, generation handles, copy/mint/move/delete/revoke | cap test (delegation/revocation/finalisation) ✓ |
+| **4** ✅ | threads + scheduler: TCB, context switch (SP swap in the trap path), preemptive per-core round robin, idle, thread stacks from the allocator | scheduler test (preemption, 3 workers + idle) ✓ |
+| **5** ✅ | IPC: synchronous endpoints (Call/Recv/Reply), SVC syscall dispatch + ABI, block/unblock + rendezvous direct switch | IPC test (call/reply round trip) ✓ |
+| **6** ✅ | Microkit runtime in the image: protection domains with their own cap space, **cap-guarded IPC** (endpoints as caps, rights check) | PD↔PD IPC + access-denied test ✓ |
+| **7** ✅ | hot reload: replace a server component in the running system (quiesce → swap via stable endpoint cap), without kernel restart, transparent to clients | hot-reload test (v1→v2, same endpoint) ✓ |
 
-Nach jeder Phase: Build → Boottest → IPC-Test → Scheduler-Test → Capability-Test
-(soweit für die Phase anwendbar) und ein Phasenbericht unter
+After every phase: build → boot test → IPC test → scheduler test → capability test
+(as far as applicable to the phase) and a phase report under
 [`phase-reports/`](phase-reports/).
 
 ---
 
-## 5. Vertrauensmodell (wichtige Konsequenz des SAS-Designs)
+## 5. Trust model (important consequence of the SAS design)
 
-Ohne MMU-Isolation kann der Kernel nativen, beliebigen Maschinencode **nicht**
-hardwareseitig einsperren: ein Prozess mit rohen Zeigern könnte ohne MMU überall
-hinschreiben. Speichersicherheit *zwischen* Komponenten beruht deshalb darauf,
-dass **alle im System laufenden Komponenten speichersicher sind** — d. h. in
-sicherem Rust geschrieben und durch eine vertrauenswürdige Toolchain übersetzt
-(intralinguale Sicherheit, wie bei Theseus). Capabilities sind die
-Autoritätsschicht darüber: sie entscheiden, *welche* Speicher-/IPC-/Geräte-Rechte
-eine Komponente überhaupt besitzt (Least Privilege).
+Without MMU isolation the kernel **cannot** lock in native, arbitrary machine code on the
+hardware side: a process with raw pointers could write anywhere without an MMU.
+Memory safety *between* components therefore rests on
+**all components running in the system being memory safe** — i.e. written in
+safe Rust and compiled by a trusted toolchain
+(intralingual safety, as in Theseus). Capabilities are the
+authority layer above it: they decide *which* memory/IPC/device rights
+a component has at all (least privilege).
 
-Daraus folgt eine harte Projektregel: `unsafe` ist außerhalb der erlaubten
-Low-Level-Domänen (Boot, Kontextwechsel, Registerzugriffe, MMU-/Interrupt-Init)
-zu vermeiden, denn dort — und nur dort — kann die intralinguale Sicherheitsgarantie
-gebrochen werden. Vollständige Begründung und Alternativen in
+From this follows a hard project rule: `unsafe` is to be avoided outside the permitted
+low-level domains (boot, context switch, register access, MMU/interrupt init),
+because there — and only there — the intralingual safety guarantee can be broken.
+Full justification and alternatives in
 [ADR 0002](adr/0002-no-virtual-memory-sas.md).
 
 ---
 
-## 6. Zielhardware
+## 6. Target hardware
 
-ARM (aarch64), 8 Kerne, 4 GiB RAM. Entwicklungs- und Testplattform: QEMU
-`virt`. Build und Boot sind in [ADR 0001](adr/0001-toolchain-and-build.md)
-beschrieben; gebaut wird mit `./build.sh`, gestartet mit `./run-qemu.sh`.
+ARM (aarch64), 8 cores, 4 GiB RAM. Development and test platform: QEMU
+`virt`. Build and boot are described in [ADR 0001](adr/0001-toolchain-and-build.md);
+build with `./build.sh`, start with `./run-qemu.sh`.

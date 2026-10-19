@@ -1,31 +1,34 @@
-# S0 A-Header-Vertrag: Linux-Symbol → Caprock-Schema
+# S0 A-header contract: Linux symbol → Caprock schema
 
-Stand: 2026-09-09. Quelle: `docs/linux-kompatibilitaet-caprock.md`
-Abschnitt 2 (A/B-Kante, Z. 34–182), Abschnitt 5 (Caprock-Lücke, Z. 331–366),
-M1/M2 (Z. 622–641); Primitive geprüft gegen
+As of: 2026-09-09. Source: `docs/linux-kompatibilitaet-caprock.md`
+section 2 (A/B edge, l. 34–182), section 5 (Caprock gap, l. 331–366),
+M1/M2 (l. 622–641); primitives checked against
 `crates/caprock-dma/src/lib.rs`, `crates/caprock-wait/src/lib.rs`,
 `crates/caprock-region/src/{lib,page,heap}.rs`, `crates/caprock-sync/src/lib.rs`.
 
-## Lesart
+## How to read it
 
-- **Klasse A** wird beim Übersetzen durch Schablonen auf Caprock abgebildet.
-  Eine Zeile ohne Schablone ist ein **Übersetzungsfehler**, kein leerer Stub.
-- **Klasse B** wird aus dem echten Linux-Quellbaum übersetzt und bekommt
-  bewusst **keine** Schablone (`fehlt:bewusst`).
-- **Art A-rein** = reine Ersetzungsregel, nichts bleibt im Binary zurück.
-  **Art A-Zustand** = die Regel erzeugt Code mit Laufzeitzustand (das Risiko
-  der Schicht).
+- **Class A** is mapped onto Caprock by templates during translation.
+  A row without a template is a **translation error**, not an empty stub.
+- **Class B** is translated from the real Linux source tree and deliberately gets
+  **no** template (`fehlt:bewusst`).
+- **Kind A-rein** = pure substitution rule, nothing is left behind in the binary.
+  **Kind A-Zustand** = the rule generates code with run-time state (the risk
+  of the layer).
 
-## Statuswerte
+## Status values
 
-| Status | Heißt |
+| Status | Means |
 |---|---|
-| `vorhanden:formell benannt` | Schema existiert und ist benannt (Regel oder PD-Crate) |
-| `vorhanden:noch ohne Frist` | Schema existiert, blockierende Form wartet auf die PARK-Frist (A2-Rest) |
-| `fehlt:Kernel` | Nicht gebaut; braucht Caprock-seitige Arbeit (Kernel oder PD-Crate) |
-| `fehlt:bewusst` | Bewusst keine Schablone (Klasse B: wird übersetzt, nicht ersetzt) |
+| `vorhanden:formell benannt` | Schema exists and is named (rule or PD crate) |
+| `vorhanden:noch ohne Frist` | Schema exists, the blocking form waits for the PARK deadline (A2 remainder) |
+| `fehlt:Kernel` | Not built; needs Caprock-side work (kernel or PD crate) |
+| `fehlt:bewusst` | Deliberately no template (class B: translated, not substituted) |
 
-## Vertragstabelle (maschinenlesbar: `lx_symbols.py` parst sie)
+## Contract table (machine-readable: `lx_symbols.py` parses it)
+
+The table cells are data that `tools/lx_symbols.py` reads (class letter, status values such as
+`vorhanden:…`); they stay in German on purpose, so this translation does not blind the parser.
 
 | Linux-Symbol | Klasse | Caprock-Schema | Art | Status |
 |---|---|---|---|---|
@@ -77,31 +80,31 @@ M1/M2 (Z. 622–641); Primitive geprüft gegen
 | dev_err | A | caprock-log dev_err/dev_warn/dev_info-Senke (LogRing: no_std, nie blockierend, voll verwirft Ältestes + Zähler) | A-Zustand | vorhanden:formell benannt |
 | printk | A | caprock-log printk-Senke + kern_stufe-Abbildung (KERN_ERR 0–3/WARNING 4–5/INFO 6–7 → Err/Warn/Info, Rest None) | A-Zustand | vorhanden:formell benannt |
 
-## Ehrliche Lücken (Querschnitt, nicht je Symbol)
+## Honest gaps (cross-cutting, not per symbol)
 
-Stand: PARK-Frist (SYS_PARK_TIMEOUT, ABI 29, Dispatch in microkit), Präemptions-Gatter
-(Spinlock + Preempt in caprock-wait), kmalloc/GFP/ksize/krealloc (caprock-region kmalloc),
-del_timer (TimerWheel::absagen) und delayed_work (msleep+queue-Komposition) sind seit diesem
-Zug vorhanden und host-getestet. Übrig bleibt:
+As of now: the PARK deadline (SYS_PARK_TIMEOUT, ABI 29, dispatch in microkit), the preemption gate
+(spinlock + preempt in caprock-wait), kmalloc/GFP/ksize/krealloc (caprock-region kmalloc),
+del_timer (TimerWheel::absagen) and delayed_work (msleep+queue composition) have been present and
+host-tested since this step. What remains:
 
-1. **Multi-Vektor:** ein Vektor je Gerät heißt Single-Queue; MSI-X mit einem
-   Vektor je Queue ist offen (§5, B-Rand) — braucht zusätzlich variablen Cspace.
-2. **Variabler Cspace:** `NCAPS = 16`, hart; für mehr Caps je PD braucht es
-   einen variablen Cspace (TODO0 K1c). Trifft `request_irq` (Cap je Vektor)
-   und jede Treiber-PD mit großem Cap-Bedarf.
-3. **Logging-Senke steht, Anbindung offen:** `dev_err`/`printk` bilden auf
-   `caprock-log` ab (Ring, Filter, `kern_stufe`); was fehlt, ist die Leser-Seite in
-   Klassenschicht oder Router (wer den Ring leert und wohin), nicht mehr die Senke.
-4. **Blockierendes `flush_workqueue`:** `Workqueue::flush` belegt nur die Leere;
-   ein Flush, der auf laufende Jobs wartet, ist mit Completion baubar, aber nicht
-   als Form ausgeschrieben.
-5. **MMIO-Barrieren als HAL-Sache:** readl/writel-Semantik (volatile + Fence) liegt
-   im arch-spezifischen HAL (B-Besitz) und ist hier nur als Schablonen-Regel benannt,
-   nicht als geprüftes Primitiv.
+1. **Multi-vector:** one vector per device means single queue; MSI-X with one
+   vector per queue is open (§5, B edge) — additionally needs a variable Cspace.
+2. **Variable Cspace:** `NCAPS = 16`, hard; for more caps per PD a variable
+   Cspace is needed (TODO0 K1c). Affects `request_irq` (cap per vector)
+   and every driver PD with a large cap demand.
+3. **Logging sink stands, wiring open:** `dev_err`/`printk` map onto
+   `caprock-log` (ring, filter, `kern_stufe`); what is missing is the reader side in the
+   class layer or router (who drains the ring and where to), no longer the sink.
+4. **Blocking `flush_workqueue`:** `Workqueue::flush` only establishes emptiness;
+   a flush that waits for running jobs can be built with completion, but is not
+   spelled out as a form.
+5. **MMIO barriers as a HAL matter:** readl/writel semantics (volatile + fence) live
+   in the arch-specific HAL (B-owned) and are only named here as a template rule,
+   not as a checked primitive.
 
-## Messung
+## Measurement
 
-- `python3 tools/lx_symbols.py` — Quote aus dieser Tabelle (M1-Näherung).
-- `python3 tools/lx_symbols.py --nm <datei>` — `nm -u`-Ausgabe (oder eine
-  Symbol-pro-Zeile-Datei) gegen die Tabelle prüfen, Unbekannte listen.
-- `tools/lx_messen.sh` — M1/M2-Stand einzeilig, Exit 0.
+- `python3 tools/lx_symbols.py` — rate from this table (M1 approximation).
+- `python3 tools/lx_symbols.py --nm <file>` — check `nm -u` output (or a
+  one-symbol-per-line file) against the table, list the unknown ones.
+- `tools/lx_messen.sh` — M1/M2 state on one line, exit 0.

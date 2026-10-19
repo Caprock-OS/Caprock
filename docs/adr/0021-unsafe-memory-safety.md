@@ -1,56 +1,56 @@
-# ADR 0021 — Speichersicherheit der Software-`unsafe`-Stellen (Kani, schrittweise)
+# ADR 0021 — Memory safety of the software `unsafe` sites (Kani, step by step)
 
-Status: **angenommen** · Datum: 2026-06-27 · ergänzt die funktionale Verifikation (Phasen 1–6).
-Bezug: ADR 0015 (Verifikationsansatz), `ARMTest/unsafe-memory-safety-aufwand.md` (Aufwandsanalyse),
+Status: **accepted** · Date: 2026-06-27 · complements functional verification (phases 1–6).
+Reference: ADR 0015 (verification approach), `ARMTest/unsafe-memory-safety-aufwand.md` (effort analysis),
 `Verification/unsafe-safety/`, `docs/verification.md` (Kani region/sync).
 
-## Kontext
+## Context
 
-Der safe-Rust-Kern (~5000 LOC) ist by-compiler speichersicher; zu beweisen bleibt nur die
-Speichersicherheit der `unsafe`-Blöcke. Die Aufwandsanalyse (`ARMTest/unsafe-memory-safety-aufwand.md`)
-teilt die ~200 Stellen scharf in **Kategorie A** (reine RAM-Zeiger/Slice — mit Kani/Verus beweisbar;
-`region`/`sync` bereits erledigt) und **Kategorie B** (Hardware-/Maschinenmodell: Pagetables, MMIO,
-Kontextwechsel-Assembly — Forschungsklasse, als vertraute HAL-Basis gekapselt). Diese ADR behandelt
-**Kategorie A**: die einzelnen, in 1–3 h gut beweisbaren Software-`unsafe`-Stellen werden **nach und
-nach** mit Kani memory-safe bewiesen.
+The safe-Rust core (~5000 LOC) is memory safe by compiler; what remains to prove is only the
+memory safety of the `unsafe` blocks. The effort analysis (`ARMTest/unsafe-memory-safety-aufwand.md`)
+sharply divides the ~200 sites into **category A** (pure RAM pointers/slices — provable with Kani/Verus;
+`region`/`sync` already done) and **category B** (hardware/machine model: page tables, MMIO,
+context-switch assembly — research class, encapsulated as a trusted HAL base). This ADR deals with
+**category A**: the individual software `unsafe` sites that are readily provable in 1–3 h are
+proved memory-safe with Kani **one by one**.
 
-## Variantenvergleich
+## Comparison of variants
 
-| Variante | Beschreibung | Bewertung |
+| Variant | Description | Assessment |
 |---|---|---|
-| V1 `#[cfg(kani)]` im Kernel-Crate | Harnesses direkt im Kernel-Code (wie region/sync) | der Kernel-Crate baut nur unter Custom-Target + build-std + HW-Deps -> unter `cargo kani` (Host-Target) nicht baubar |
-| V2 Verus-Puffermodell | das Modell statt der echten `core::ptr`-Ops beweisen | beweist die Arithmetik, prüft aber **nicht** die echten unsafe-Ops |
-| **V3 eigenständiges Kani-Artefakt (gewählt)** | `Verification/unsafe-safety/`: **getreue Kopien** der Kernel-unsafe-Glue, Kani führt die **echten** `core::ptr`-Ops auf modelliertem Puffer aus | prüft die realen unsafe-Operationen (OOB/Underflow/UB); Kernel unverändert; Treue der Kopie = kleine, auditierbare TCB |
+| V1 `#[cfg(kani)]` in the kernel crate | harnesses directly in the kernel code (like region/sync) | the kernel crate builds only under a custom target + build-std + HW deps -> not buildable under `cargo kani` (host target) |
+| V2 Verus buffer model | prove the model instead of the real `core::ptr` ops | proves the arithmetic, but does **not** check the real unsafe ops |
+| **V3 standalone Kani artefact (chosen)** | `Verification/unsafe-safety/`: **faithful copies** of the kernel unsafe glue, Kani executes the **real** `core::ptr` ops on a modelled buffer | checks the real unsafe operations (OOB/underflow/UB); kernel unchanged; fidelity of the copy = small, auditable TCB |
 
-## Entscheidung
+## Decision
 
-**V3** — ein eigenständiges Kani-Verifikationsartefakt (`Verification/unsafe-safety/kani/`): jede
-`*_logic`-Funktion ist eine **byte-genaue Kopie** der unsafe-Glue einer Kernel-Stelle (Zeile
-referenziert); Kani-Harnesses führen die echten `copy_nonoverlapping`/`write_bytes`/… auf einem
-modellierten Puffer aus und beweisen Out-of-Bounds-/Underflow-/UB-Freiheit **unter der dokumentierten
-Vorbedingung** — die ihrerseits am Aufrufer als reine Arithmetik bewiesen wird. Realer Kernel-Code
-unverändert; via `tools/kani-verify.sh unsafe` + CI-Gate.
+**V3** — a standalone Kani verification artefact (`Verification/unsafe-safety/kani/`): every
+`*_logic` function is a **byte-exact copy** of the unsafe glue of one kernel site (line
+referenced); Kani harnesses execute the real `copy_nonoverlapping`/`write_bytes`/… on a
+modelled buffer and prove freedom from out-of-bounds/underflow/UB **under the documented
+precondition** — which in turn is proved at the caller as pure arithmetic. Real kernel code
+unchanged; via `tools/kani-verify.sh unsafe` + CI gate.
 
-**Auswahlkriterium „sinnvoll beweisbar":** eine Stelle wird aufgenommen, wenn sie (a) Kategorie A
-(normales RAM) ist und (b) in 1–3 h gut beweisbar ist. Reine Trust-Primitive ohne in-Funktion-Bounds
-(`mem::peek/poke` auf beliebige Cap-Adressen, MMIO-`volatile`, fixe RAM-Fenster-Slices) werden **nicht**
-„bewiesen", sondern als HW-/Cap-Vertrag dokumentiert (ihre Gültigkeit kommt aus dem bereits
-verifizierten Cap-System bzw. der HAL-TCB).
+**Selection criterion "sensibly provable":** a site is included if it is (a) category A
+(ordinary RAM) and (b) readily provable in 1–3 h. Pure trust primitives without in-function bounds
+(`mem::peek/poke` on arbitrary cap addresses, MMIO `volatile`, fixed RAM-window slices) are **not**
+"proved", but documented as an HW/cap contract (their validity comes from the already
+verified cap system or the HAL TCB).
 
-## Konsequenzen
+## Consequences
 
-- **Positiv:** die Software-`unsafe`-Stellen (Kategorie A) erhalten einen maschinengeprüften
-  Memory-Safety-Beweis mit den echten `core::ptr`-Operationen; ergänzt die bestehenden region/sync-
-  Kani-Beweise. Schrittweise erweiterbar (eine Stelle je Iteration).
-- **Grenzen:** **Kategorie B** (Pagetables/MMIO/Assembly) bleibt die axiomatisierte, hand-auditierte
-  HAL-TCB (vgl. Aufwandsanalyse). Die **Fidelity** der Kopie ↔ Kernel-Stelle ist eine dokumentierte
-  Annahme (klein, je Stelle ein Zeilenverweis; bei Kernel-Änderung nachzuziehen).
+- **Positive:** the software `unsafe` sites (category A) obtain a machine-checked
+  memory-safety proof with the real `core::ptr` operations; complements the existing region/sync
+  Kani proofs. Extensible step by step (one site per iteration).
+- **Limits:** **category B** (page tables/MMIO/assembly) remains the axiomatised, hand-audited
+  HAL TCB (cf. effort analysis). The **fidelity** of copy ↔ kernel site is a documented
+  assumption (small, one line reference per site; to be updated whenever the kernel changes).
 
-## Abgedeckte Stellen (wächst je Iteration)
+## Sites covered (grows with each iteration)
 
-| # | Kernel-Stelle | Eigenschaft | Status |
+| # | Kernel site | Property | Status |
 |---|---|---|---|
-| 1 | `kernel/src/system.rs::copy_segment` (einzige unsafe-Stelle des Ladepfads) | Kopie+`.bss`-Nullung bleibt im Ziel-Frame; Vorbedingung `filesz<=total` am Aufrufer etabliert | ✅ |
-| 2 | `crates/caprock-region/src/heap.rs` (Slab-Free-Liste, `read`/`write` des eingebetteten Nachfolger-Zeigers) | jede Größenklasse fasst einen `usize` + ist usize-ausgerichtet; roher Read/Write des Slot-Zeigers in-bounds + aligned (Round-Trip) | ✅ |
-| 3 | `kernel/src/system.rs` Code-Kopie (system.rs:1154) | im selben Rumpf geprüfter Guard `code_len<=clen` (system.rs:1140) schützt die rohe Kopie -> bleibt im `clen`-Frame | ✅ |
-| 4 | `kernel/src/system.rs::alloc_zeroed` (system.rs:1676) | `write_bytes(base,0,len)` über einen `len`-Byte-Block in-bounds + nullt jedes Byte | ✅ |
+| 1 | `kernel/src/system.rs::copy_segment` (the only unsafe site of the load path) | copy+`.bss` zeroing stays in the target frame; precondition `filesz<=total` established at the caller | ✅ |
+| 2 | `crates/caprock-region/src/heap.rs` (slab free list, `read`/`write` of the embedded successor pointer) | every size class holds a `usize` + is usize-aligned; raw read/write of the slot pointer in-bounds + aligned (round trip) | ✅ |
+| 3 | `kernel/src/system.rs` code copy (system.rs:1154) | guard `code_len<=clen` checked in the same body (system.rs:1140) protects the raw copy -> stays in the `clen` frame | ✅ |
+| 4 | `kernel/src/system.rs::alloc_zeroed` (system.rs:1676) | `write_bytes(base,0,len)` over a `len`-byte block in-bounds + zeroes every byte | ✅ |

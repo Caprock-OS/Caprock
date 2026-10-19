@@ -1,76 +1,76 @@
 # ADR 0005 — Scheduler
 
-**Status:** umgesetzt + verfeinert · **Datum:** 2026-06-23
+**Status:** implemented + refined · **Date:** 2026-06-23
 
-> **Umsetzungsstand:** Pro-Kern-Bitmap-Scheduler (Ansatz B) mit fester Affinität
-> ist implementiert (`caprock-sched`): präemptiv, O(1)-Auswahl,
-> `block`/`unblock`/`switch_to`, `exit`/`kill`/`reap`. **FP-Kontext: eager**
-> (volles q0..q31-Save/Restore im Trap-Pfad). **Lazy-FP wurde versucht und
-> verworfen** — `CPACR`-Trapping bei EL1 trappt auch den NEON-Code des Kernels
-> selbst; Lazy-FP braucht eine EL0/EL1-Trennung (echtes Userland) und ist daran
-> geknüpft (siehe `docs/phase-reports/ext-3-lazy-fp-locks.md`). **Lock-Granularität:**
-> Scheduler-Lock (`SCHED`) ist vom Ressourcen-Lock (`RES`) getrennt (feste Ordnung
-> RES→SCHED); echte per-Kern-*parallele* Scheduler-Instanzen (mit Cross-Core-IPI)
-> sind ein vorgemerkter Folge-Refactor. MCS-Scheduling-Contexts (Budget/Donation)
-> weiterhin offen.
+> **Implementation status:** per-core bitmap scheduler (approach B) with fixed affinity
+> is implemented (`caprock-sched`): preemptive, O(1) selection,
+> `block`/`unblock`/`switch_to`, `exit`/`kill`/`reap`. **FP context: eager**
+> (full q0..q31 save/restore in the trap path). **Lazy FP was tried and
+> rejected** — `CPACR` trapping at EL1 also traps the kernel's own NEON code;
+> lazy FP needs an EL0/EL1 separation (real userland) and is tied to it
+> (see `docs/phase-reports/ext-3-lazy-fp-locks.md`). **Lock granularity:**
+> the scheduler lock (`SCHED`) is separate from the resource lock (`RES`) (fixed order
+> RES→SCHED); real per-core *parallel* scheduler instances (with cross-core IPI)
+> are a follow-up refactor that has been noted. MCS scheduling contexts (budget/donation)
+> remain open.
 
 ## Motivation
 
-Der Scheduler soll **deterministisch, multicorefähig, ARM-optimiert** und
-**latenzarm** sein. Zielkonfiguration: 8 Kerne, 4 GiB RAM.
+The scheduler is to be **deterministic, multicore-capable, ARM-optimised** and
+**low-latency**. Target configuration: 8 cores, 4 GiB RAM.
 
-## Referenz: seL4
+## Reference: seL4
 
-Klassisch: pro Domäne/Priorität Ready-Queues mit L1/L2-Bitmap für O(1)-Auswahl,
-Round-Robin-Domänen-Scheduling (Determinismus/Isolation). MCS-Variante: explizite
-**Scheduling-Contexts** (Budget + Sporadic-Server-Refill), Budget-Donation bei
-Reply. SMP: pro-Kern-Scheduler-Zustand, IPIs zum Reschedule. Details:
+Classic: per domain/priority ready queues with an L1/L2 bitmap for O(1) selection,
+round-robin domain scheduling (determinism/isolation). MCS variant: explicit
+**scheduling contexts** (budget + sporadic-server refill), budget donation on
+reply. SMP: per-core scheduler state, IPIs for reschedule. Details:
 [`../seL4-architecture-map.md`](../seL4-architecture-map.md).
 
-## Analysierte Lösungsansätze
+## Approaches analysed
 
-### A) Globale Run-Queue
-- **+** Einfaches Lastausgleichsverhalten.
-- **−** Globale Sperre → Contention und Nichtdeterminismus auf 8 Kernen. Verworfen.
+### A) Global run queue
+- **+** Simple load-balancing behaviour.
+- **−** Global lock → contention and non-determinism on 8 cores. Rejected.
 
-### B) Pro-Kern-Ready-Queues + Bitmap-Prioritäten, feste Affinität (gewählt)
-Jeder Kern hat eigene Ready-Queues mit L1/L2-Prioritäts-Bitmap (O(1)-Auswahl).
-Threads haben eine **feste Kern-Affinität** (explizit, nicht heuristisch
-migrierend). Migration nur durch expliziten Capability-Aufruf.
+### B) Per-core ready queues + bitmap priorities, fixed affinity (chosen)
+Each core has its own ready queues with an L1/L2 priority bitmap (O(1) selection).
+Threads have a **fixed core affinity** (explicit, not heuristically
+migrating). Migration only by an explicit capability call.
 
-- **+** Keine globale Sperre → Determinismus + Skalierung.
-- **+** O(1)-Auswahl, vorhersagbare Latenz.
-- **+** Feste Affinität = reproduzierbares Timing (gut für *deterministisch*).
-- **−** Lastausgleich ist explizit/manuell statt automatisch (bewusst: Vorhersagbarkeit
-  vor Heuristik).
+- **+** No global lock → determinism + scaling.
+- **+** O(1) selection, predictable latency.
+- **+** Fixed affinity = reproducible timing (good for *deterministic*).
+- **−** Load balancing is explicit/manual instead of automatic (deliberate: predictability
+  before heuristics).
 
-### C) MCS-Scheduling-Contexts für Budgetierung (übernommen als Schicht)
-Budget + Periode pro Scheduling-Context, Sporadic-Server-Refill, Donation bei
-Reply — als optionale Schicht über B.
+### C) MCS scheduling contexts for budgeting (adopted as a layer)
+Budget + period per scheduling context, sporadic-server refill, donation on
+reply — as an optional layer on top of B.
 
-- **+** Zeitliche Isolation/Garantien, deterministische Budgets, ideal für
-  Echtzeit und für faire Behandlung hot-reloadbarer Dienste.
-- **−** Mehr Zustand/Komplexität; daher schrittweise nach dem Basis-Scheduler.
+- **+** Temporal isolation/guarantees, deterministic budgets, ideal for
+  real time and for fair treatment of hot-reloadable services.
+- **−** More state/complexity; hence step by step after the basic scheduler.
 
-## Entscheidung
+## Decision
 
-**B als Basis, C als Schicht.** Pro-Kern-Bitmap-Scheduler mit fester Affinität
-und Prioritäten; darüber optionale Scheduling-Contexts (Budget/Refill/Donation)
-nach MCS-Vorbild. Cross-Core-Reschedule über gezielte IPIs (ADR 0004), nicht über
-globale Sperren. Idle-Thread pro Kern (`wfi`/`wfe`).
+**B as the base, C as a layer.** Per-core bitmap scheduler with fixed affinity
+and priorities; on top optional scheduling contexts (budget/refill/donation)
+on the MCS model. Cross-core reschedule via targeted IPIs (ADR 0004), not via
+global locks. Idle thread per core (`wfi`/`wfe`).
 
-ARM-Spezifika: Zeitbasis ist der **Generic Timer** (`CNTPCT`/`CNTV`), Interrupts
-über die **GIC** (Phase 1). Kontextwechsel speichert GP-Register immer, FP/SIMD
-**lazy** (nur wenn der Thread sie nutzt) — spart Zyklen im häufigen Fall.
+ARM specifics: the time base is the **generic timer** (`CNTPCT`/`CNTV`), interrupts
+via the **GIC** (phase 1). Context switch always saves GP registers, FP/SIMD
+**lazily** (only if the thread uses them) — saves cycles in the common case.
 
-## Sicherheitsauswirkungen
+## Security implications
 
-Feste Affinität + pro-Kern-Zustand reduzieren Cross-Core-Seitenkanäle und
-Timing-Variabilität. Scheduling-Contexts verhindern, dass eine kompromittierte
-Komponente CPU-Zeit monopolisiert (Verfügbarkeits-Schutz).
+Fixed affinity + per-core state reduce cross-core side channels and
+timing variability. Scheduling contexts prevent a compromised
+component from monopolising CPU time (availability protection).
 
-## Performanceauswirkungen
+## Performance implications
 
-O(1)-Auswahl, keine globale Contention, kein TTBR-Wechsel beim Switch (ADR 0002)
-→ niedrige, konstante Kontextwechsel-Latenz. Lazy-FP spart im typischen Fall den
-SIMD-Save/Restore.
+O(1) selection, no global contention, no TTBR switch on a switch (ADR 0002)
+→ low, constant context-switch latency. Lazy FP saves the SIMD save/restore
+in the typical case.

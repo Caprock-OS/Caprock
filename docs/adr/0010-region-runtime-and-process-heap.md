@@ -1,91 +1,91 @@
-# ADR 0010 — Region-Runtime + prozess-lokaler Hybrid-Heap (Safe-Rust-API, gekapseltes `unsafe`)
+# ADR 0010 — Region runtime + process-local hybrid heap (safe-Rust API, encapsulated `unsafe`)
 
-Status: **Akzeptiert** (ext-25, umgesetzt R0–R4)
+Status: **Accepted** (ext-25, implemented R0–R4)
 
-## Kontext
+## Context
 
-ADR 0002 (SAS) verlangt: jede Adresse ist real-physisch, keine MMU-Isolation, Speichersicherheit
-ausschließlich über Capabilities + Safe Rust. Bis ext-24 hatten Trusted-SAS-Prozesse **keinen
-dynamischen RAM** (`#![no_std]`, kein `#[global_allocator]`, kein `Box`/`Vec`); cap-gewährte
-Regionen waren nur über rohes `peek_u64`/`poke_u64` erreichbar. Ziel von ext-25: **echter
-dynamischer Heap** (Box/Vec/BTreeMap) für safe-Rust-SAS-Prozesse auf realen Physadressen — ohne
-`unsafe` im App-Code, ohne einen allgemeinen `MemoryCap -> &mut [u8]`-Wrapper nach außen.
+ADR 0002 (SAS) demands: every address is real-physical, no MMU isolation, memory safety
+exclusively via capabilities + safe Rust. Until ext-24, trusted-SAS processes had **no
+dynamic RAM** (`#![no_std]`, no `#[global_allocator]`, no `Box`/`Vec`); cap-granted
+regions were reachable only via raw `peek_u64`/`poke_u64`. Goal of ext-25: a **real
+dynamic heap** (Box/Vec/BTreeMap) for safe-Rust SAS processes on real physical addresses — without
+`unsafe` in app code, without a general `MemoryCap -> &mut [u8]` wrapper exposed outward.
 
-## Entscheidung
+## Decision
 
-### 1. Runtime-Schicht `caprock-region` — die EINZIGE Stelle mit Speicher-`unsafe`
-Zwei Typen kapseln allen rohen Zugriff; die öffentliche API ist vollständig Safe Rust:
+### 1. Runtime layer `caprock-region` — the ONLY place with memory `unsafe`
+Two types encapsulate all raw access; the public API is entirely safe Rust:
 
-- **`Region`** — die **cap-besessene** Einheit: hält einen `MemoryCap` (lineares Eigentum) +
-  Audit-Metadaten (`RegionTag { id, Purpose }`). `phys()`/`len()`/`into_cap()`/`view()`. Ein
-  Prozess hält eine **Menge** davon — nie „einen Heap".
-- **`RegionView<'a>`** — eine geliehene, **begrenzte** Sicht. Bietet nur sichere Operationen:
-  - typisierte **kopierende** Zugriffe `get<T: Pod>`/`set<T: Pod>`/`copy_from`/`copy_to`/`fill`,
-  - **scoped** `with_bytes(|s: &mut [u8]| …)` — der Slice ist an die Closure gebunden und kann sie
-    **nicht verlassen** (ergonomisch fürs Parsen/memcpy/DMA-Füllen, ohne dass ein nackter Slice
-    nach außen leckt),
-  - `split_at`/`subview` — die Operationen, auf denen der Allokator arbeitet.
+- **`Region`** — the **cap-owned** unit: holds a `MemoryCap` (linear ownership) +
+  audit metadata (`RegionTag { id, Purpose }`). `phys()`/`len()`/`into_cap()`/`view()`. A
+  process holds a **set** of them — never "one heap".
+- **`RegionView<'a>`** — a borrowed, **bounded** view. Offers only safe operations:
+  - typed **copying** accesses `get<T: Pod>`/`set<T: Pod>`/`copy_from`/`copy_to`/`fill`,
+  - **scoped** `with_bytes(|s: &mut [u8]| …)` — the slice is bound to the closure and
+    **cannot leave** it (ergonomic for parsing/memcpy/DMA filling, without a bare slice
+    leaking outward),
+  - `split_at`/`subview` — the operations the allocator works on.
 
-Die wenigen `unsafe`-Blöcke (in den `RegionView`-Accessoren + der Allokator-Glue) sind durch die
-**cap-validierte** Region (Besitz + Bounds + Rechte) + die Bounds-Checks begründet und auditierbar.
+The few `unsafe` blocks (in the `RegionView` accessors + the allocator glue) are justified by the
+**cap-validated** region (ownership + bounds + rights) + the bounds checks and are auditable.
 
-(Verworfen: ein öffentlicher `region_as_slice() -> &mut [u8]`-Wrapper — er würde nackte Slices
-überall verteilen und Heap/DMA/Hot-Reload/Audit-Metadaten nicht trennen.)
+(Rejected: a public `region_as_slice() -> &mut [u8]` wrapper — it would distribute bare slices
+everywhere and not separate heap/DMA/hot-reload/audit metadata.)
 
-### 2. Multi-Region von Anfang an + `RegionSource` (grow/shrink)
-Ein Prozess-Heap besitzt eine **Regionsliste**, nicht eine Region. Eine `RegionSource`-Trait
-abstrahiert grow/shrink:
+### 2. Multi-region from the start + `RegionSource` (grow/shrink)
+A process heap owns a **region list**, not one region. A `RegionSource` trait
+abstracts grow/shrink:
 
 ```
 trait RegionSource { fn request(min_len, Purpose) -> Option<Region>; fn release(Region); }
 ```
 
-Kernel-/Trusted-SAS-seitig bedient `KernelRegionSource` sie direkt aus dem physischen Allokator
-(`MEM`); ein EL0-Prozess würde dasselbe per Syscall marshallen — die Schnittstelle bleibt identisch.
+On the kernel/trusted-SAS side `KernelRegionSource` serves it directly from the physical allocator
+(`MEM`); an EL0 process would marshal the same via syscall — the interface stays identical.
 
-### 3. Hybrid-Allokator (gewählt nach Vergleich) — `Heap<S: RegionSource>` ⊳ `core::alloc::Allocator`
-- **Klein** (≤ größte Klasse): **Größenklassen-Slabs** (16…2048 B). Je Klasse eine **intrusive**
-  Free-Liste freigegebener Slots; neue Slots werden aus einer **Bump-Region** geschnitten
-  (beschränkte Fragmentierung, O(1)). Ist eine Bump-Region voll → neue über `RegionSource` (grow).
-- **Groß** (> größte Klasse): eine **dedizierte** Region je Allokation (kontiguierlich, DMA-/Hot-
-  Reload-tauglich); bei `dealloc` sofort an die Source zurück (shrink). `Heap::drop` gibt **alle**
-  Regionen zurück.
+### 3. Hybrid allocator (chosen after comparison) — `Heap<S: RegionSource>` ⊳ `core::alloc::Allocator`
+- **Small** (≤ largest class): **size-class slabs** (16…2048 B). Per class an **intrusive**
+  free list of freed slots; new slots are cut from a **bump region**
+  (bounded fragmentation, O(1)). If a bump region is full → a new one via `RegionSource` (grow).
+- **Large** (> largest class): a **dedicated** region per allocation (contiguous, suitable for DMA/hot
+  reload); on `dealloc` immediately back to the source (shrink). `Heap::drop` returns **all**
+  regions.
 
-Verglichene Alternativen (für den SAS, **ohne** Kompaktierung):
-- *Bump/Arena-only:* optimal in 5/6 Kriterien, aber kein mixed-lifetime-Heap → nur als Large-/
-  Arena-Pfad genutzt.
-- *Region-Free-List (klassischer malloc):* im SAS dauerhafte Fragmentierung (keine Kompaktierung)
-  + schwerste Verifikationslast (Coalescing-Invarianten) → **verworfen**.
-- *Reine Größenklassen:* gut, aber DMA/Zustand nicht sauber getrennt → zum Hybrid erweitert.
+Alternatives compared (for the SAS, **without** compaction):
+- *Bump/arena only:* optimal in 5/6 criteria, but no mixed-lifetime heap → used only as a large/
+  arena path.
+- *Region free list (classic malloc):* permanent fragmentation in the SAS (no compaction)
+  + heaviest verification load (coalescing invariants) → **rejected**.
+- *Pure size classes:* good, but DMA/state not cleanly separated → extended to the hybrid.
 
-Begründung: der Hybrid trifft Fragmentierung / Performance / Hot-Reload / Zero-Copy / DMA /
-Verifikation **gleichzeitig** und hält das `unsafe` minimal (Bump trivial + Slab simpel, **kein**
-Coalescing-Malloc).
+Rationale: the hybrid meets fragmentation / performance / hot reload / zero-copy / DMA /
+verification **at the same time** and keeps the `unsafe` minimal (bump trivial + slab simple, **no**
+coalescing malloc).
 
-### 4. Kein impliziter globaler Heap
-Das SAS-Modell verlangt **prozess-lokale** Heap-Instanzen (`Heap::new(source)` + `Box::new_in`/
-`Vec::new_in`/`BTreeMap::new_in`). Der `#[global_allocator]` ist ein **Wächter** (`NoGlobalHeap`),
-der versehentliches `Box::new`/`Vec::new` paniert — ein impliziter, prozess-übergreifender Heap
-existiert bewusst nicht (welche Regionen welches Prozesses?).
+### 4. No implicit global heap
+The SAS model demands **process-local** heap instances (`Heap::new(source)` + `Box::new_in`/
+`Vec::new_in`/`BTreeMap::new_in`). The `#[global_allocator]` is a **guard** (`NoGlobalHeap`)
+that panics on accidental `Box::new`/`Vec::new` — an implicit, cross-process heap
+deliberately does not exist (which regions of which process?).
 
-## Vertrauens-/Sicherheitsmodell
+## Trust/security model
 
-Mit *no unsafe im App-Code + buglosem Compiler* (ADR 0002): ein safe-Rust-Prozess kann keinen
-Zeiger fälschen und nur Speicher berühren, der von seinen legitimen Referenzen erreichbar ist —
-Stack, statische Daten, **sein Heap** (= seine `Region`-Menge). Die `caprock-region`-Runtime ist
-die **kleine, klar auditierbare** Schicht, in der das gesamte Speicher-`unsafe` konzentriert ist;
-ihre Korrektheit (Bounds + cap-Besitz) trägt die Isolation, **ohne** MMU. Capabilities regeln,
-*welche* Regionen der Kernel überhaupt gewährt (Least Privilege).
+With *no unsafe in app code + a bug-free compiler* (ADR 0002): a safe-Rust process cannot forge a
+pointer and can only touch memory reachable from its legitimate references —
+stack, static data, **its heap** (= its `Region` set). The `caprock-region` runtime is
+the **small, clearly auditable** layer in which all memory `unsafe` is concentrated;
+its correctness (bounds + cap ownership) carries the isolation, **without** an MMU. Capabilities govern
+*which* regions the kernel grants at all (least privilege).
 
-## Konsequenzen
+## Consequences
 
-- Trusted-SAS-Prozesse können nun `Box`/`Vec`/`BTreeMap` auf realen Physadressen nutzen; der
-  Heap wächst/schrumpft über `RegionSource`.
-- **Zukunft ohne API-Bruch:** DMA-Regionen sind dieselbe `Region`/`RegionView` (Purpose::Dma; der
-  ext-24-`DmaPool` ist ein Spezialfall); Hot-Reload-Zustand lebt in einer `Region`, die per Cap an
-  v2 übergeben wird (identity-stabile Adresse); Audit-/Debug-Info hängt an `RegionTag`.
-- **SAS-Preise (bewusst):** Heap = nicht-zusammenhängende Regionen; **keine** Lebend-Kompaktierung
-  (Referenzen dürfen nicht verschoben werden); Fragmentierung sichtbar → mit Größenklassen begegnet.
-- **Aufgeschoben:** Slab-Region-Reclaim bei vollständig freier Region (erfordert Free-Listen-
-  Filterung), EL0-Syscall-`RegionSource` (kernel-seitig direkt), Slab-Batching, `realloc`-Fastpath
-  (derzeit über den `Allocator`-Default grow = alloc+copy+dealloc).
+- Trusted-SAS processes can now use `Box`/`Vec`/`BTreeMap` on real physical addresses; the
+  heap grows/shrinks via `RegionSource`.
+- **Future without an API break:** DMA regions are the same `Region`/`RegionView` (Purpose::Dma; the
+  ext-24 `DmaPool` is a special case); hot-reload state lives in a `Region` that is handed to
+  v2 via cap (identity-stable address); audit/debug info hangs on `RegionTag`.
+- **SAS prices (deliberate):** heap = non-contiguous regions; **no** live compaction
+  (references must not be moved); fragmentation visible → countered with size classes.
+- **Deferred:** slab region reclaim when a region is entirely free (requires free-list
+  filtering), EL0 syscall `RegionSource` (kernel side directly), slab batching, `realloc` fastpath
+  (currently via the `Allocator` default grow = alloc+copy+dealloc).

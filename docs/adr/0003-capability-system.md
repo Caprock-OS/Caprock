@@ -1,93 +1,93 @@
-# ADR 0003 — Capability-System und physisches Speichermodell
+# ADR 0003 — Capability system and physical memory model
 
-**Status:** umgesetzt (Kern) · **Datum:** 2026-06-23
+**Status:** implemented (core) · **Date:** 2026-06-23
 
-> **Umsetzungsstand:**
-> - *Phase 2* (`crates/caprock-mem`): physisches Speichermodell — `MemoryCap`
->   als lineare (move-only) Capability, `PhysAllocator` (koaleszierende Freiliste).
-> - *Phase 3* (`crates/caprock-cap`): der **CDT-Kern** ist implementiert —
->   `CapSpace` (typsichere Slots + Derivation-Tree), Objekt-Tabelle mit Refcount
->   und Finalisierung, Generations-Handles (`CapPtr`), Operationen `copy`/`mint`/
->   `move`/`delete`/`revoke` (Rechte nur einschränkbar). Alles sicheres Rust
->   (0 unsafe). Siehe `docs/phase-reports/phase-3.md`.
-> - **Noch offen** (spätere Phasen): weitere `ObjectKind`s (Endpoint/Notification/
->   TCB/Device), mehrere cspaces + mehrstufige CNode-Adressierung (Guards/Radix),
->   dynamischer Backing-Store für Caps/Objekte. Das unten skizzierte Design bleibt
->   die Richtschnur.
+> **Implementation status:**
+> - *Phase 2* (`crates/caprock-mem`): physical memory model — `MemoryCap`
+>   as a linear (move-only) capability, `PhysAllocator` (coalescing free list).
+> - *Phase 3* (`crates/caprock-cap`): the **CDT core** is implemented —
+>   `CapSpace` (type-safe slots + derivation tree), object table with refcount
+>   and finalisation, generation handles (`CapPtr`), operations `copy`/`mint`/
+>   `move`/`delete`/`revoke` (rights can only be restricted). All safe Rust
+>   (0 unsafe). See `docs/phase-reports/phase-3.md`.
+> - **Still open** (later phases): further `ObjectKind`s (endpoint/notification/
+>   TCB/device), several cspaces + multi-level CNode addressing (guards/radix),
+>   dynamic backing store for caps/objects. The design sketched below remains
+>   the guideline.
 
 ## Motivation
 
-Capabilities sind die einzige Autoritätsquelle im System: ein Prozess darf genau
-das, wofür er eine gültige Capability besitzt (Speicher, IPC, Geräte, Dienste,
-Prozessverwaltung). Im SAS-Design (ADR 0002) ersetzen sie die fehlende
-MMU-Isolation als Autoritätsschicht.
+Capabilities are the only source of authority in the system: a process may do exactly
+what it holds a valid capability for (memory, IPC, devices, services,
+process management). In the SAS design (ADR 0002) they replace the missing
+MMU isolation as the authority layer.
 
-## Referenz: seL4-Modell
+## Reference: the seL4 model
 
-seL4 speichert Capabilities in *CTEs* (Cap + MDB-Knoten), organisiert in *CNodes*
-(radix-baumartig adressiert), und verwaltet Ableitungen über einen *Capability
-Derivation Tree* (CDT/MDB). Kernoperationen: `copy`, `mint` (Rechte
-einschränken + Badge), `move`, `delete`, `revoke` (rekursiv alle Abkömmlinge).
-Speicher entsteht aus *Untyped*-Regionen via `retype`. Siehe
+seL4 stores capabilities in *CTEs* (cap + MDB node), organised in *CNodes*
+(addressed like a radix tree), and manages derivations via a *capability
+derivation tree* (CDT/MDB). Core operations: `copy`, `mint` (restrict rights
++ badge), `move`, `delete`, `revoke` (recursively all descendants).
+Memory arises from *untyped* regions via `retype`. See
 [`../seL4-architecture-map.md`](../seL4-architecture-map.md).
 
-## Analysierte Lösungsansätze (Repräsentation)
+## Approaches analysed (representation)
 
-### A) seL4-getreue, zeigerbasierte CTE/CNode-Struktur in `unsafe` Rust
-- **+** Bekannt, fastpath-tauglich.
-- **−** Viel `unsafe` (rohe Zeiger, intrusive Listen) — widerspricht der
-  Unsafe-Minimierung. Verworfen als Default.
+### A) True-to-seL4, pointer-based CTE/CNode structure in `unsafe` Rust
+- **+** Well known, fastpath-capable.
+- **−** Lots of `unsafe` (raw pointers, intrusive lists) — contradicts the
+  unsafe minimisation. Rejected as the default.
 
-### B) Typsichere CNode als Slot-Tabellen + CDT als Arena mit Indizes (gewählt)
-CNodes sind `Slot`-Arrays; der Derivation-Tree ist eine **Arena** (`Vec`-artiger
-Pool im kernel-eigenen, capability-verwalteten Speicher) mit **Index-Handles**
-statt roher Zeiger. Capabilities sind ein Rust-`enum` mit Typ-Tag + Rechtemaske
-+ optionalem Badge.
+### B) Type-safe CNode as slot tables + CDT as an arena with indices (chosen)
+CNodes are `Slot` arrays; the derivation tree is an **arena** (`Vec`-like
+pool in kernel-owned, capability-managed memory) with **index handles**
+instead of raw pointers. Capabilities are a Rust `enum` with a type tag + rights mask
++ optional badge.
 
-- **+** Speichersicher ohne `unsafe`: Index-Handles statt Zeiger, der
-  Borrow-Checker schützt die Strukturen.
-- **+** `enum` macht Cap-Typen explizit und erschöpfend matchbar.
-- **+** Revocation = Baum-Traversierung über Indizes; deterministisch begrenzbar
-  (seL4-Zombie-Technik für lange Revokes übernehmbar).
-- **−** Arena-Indizes brauchen Generationszähler gegen Stale-Handles
-  (gut beherrschbar, kostet ein Wort pro Slot).
+- **+** Memory safe without `unsafe`: index handles instead of pointers, the
+  borrow checker protects the structures.
+- **+** `enum` makes cap types explicit and exhaustively matchable.
+- **+** Revocation = tree traversal over indices; can be bounded deterministically
+  (the seL4 zombie technique for long revokes can be adopted).
+- **−** Arena indices need generation counters against stale handles
+  (well manageable, costs one word per slot).
 
-### C) Reine Capability-Pointer-Maschine ohne CDT
-- **−** Ohne Ableitungsbaum keine korrekte rekursive Revocation. Verworfen.
+### C) Pure capability-pointer machine without a CDT
+- **−** Without a derivation tree there is no correct recursive revocation. Rejected.
 
-## Entscheidung
+## Decision
 
-**Ansatz B.** Capabilities als Rust-`enum` mit Rechtemaske und Badge; CNodes als
-typsichere Slot-Tabellen; CDT als generationsgesicherte Arena mit Index-Handles.
-Operationen `copy/mint/move/delete/revoke` als sichere Methoden; `unsafe` nur
-dort, wo Cap-verwalteter Rohspeicher initial typisiert wird (Retype-Grenze).
+**Approach B.** Capabilities as a Rust `enum` with rights mask and badge; CNodes as
+type-safe slot tables; CDT as a generation-protected arena with index handles.
+Operations `copy/mint/move/delete/revoke` as safe methods; `unsafe` only
+where cap-managed raw memory is initially typed (retype boundary).
 
-**Capability-Klassen (geplant):** `Memory` (physische Region + Rechte
-RWX/Owner), `Endpoint`, `Notification`, `Reply`, `Tcb`/`Process`, `Device`
-(MMIO-Region/IRQ), `Service` (benannter Dienst-Endpoint), `CNode`.
+**Capability classes (planned):** `Memory` (physical region + rights
+RWX/owner), `Endpoint`, `Notification`, `Reply`, `Tcb`/`Process`, `Device`
+(MMIO region/IRQ), `Service` (named service endpoint), `CNode`.
 
-## Physisches Speichermodell (Phase 2)
+## Physical memory model (phase 2)
 
-- Beim Boot erhält der Root-Prozess **Memory-Capabilities** über das gesamte
-  freie physische RAM (eine oder wenige große Regionen, aus DTB ermittelt).
-- Ein **capability-basierter Allokator** vergibt Unterregionen durch *Splitten*
-  einer Memory-Cap (analog seL4-`retype`, aber auf physische Regionen statt
-  Untyped-Objekte). Splits sind Kinder im CDT der Eltern-Cap.
-- Prozesse können RAM **anfordern** (Split aus einer besessenen Region),
-  **zurückgeben** (Merge/Delete der Kind-Cap), **übertragen** (Move/Copy der Cap
-  über IPC) und **von Eltern erhalten** (Delegation beim Spawn).
-- Da Adresse == Phys-Adresse (ADR 0002), beschreibt eine Memory-Cap direkt einen
-  realen Bereich `[base, base+len)` mit Rechten — kein Mapping nötig.
+- At boot the root process receives **memory capabilities** over all
+  free physical RAM (one or a few large regions, determined from the DTB).
+- A **capability-based allocator** hands out sub-regions by *splitting*
+  a memory cap (analogous to seL4 `retype`, but on physical regions instead of
+  untyped objects). Splits are children in the CDT of the parent cap.
+- Processes can **request** RAM (split from a region they own),
+  **return** it (merge/delete of the child cap), **transfer** it (move/copy of the cap
+  via IPC) and **receive it from parents** (delegation at spawn).
+- Since address == physical address (ADR 0002), a memory cap directly describes a
+  real range `[base, base+len)` with rights — no mapping needed.
 
-## Sicherheitsauswirkungen
+## Security implications
 
-Least Privilege per Konstruktion; Delegation und Revocation über den CDT; keine
-Ambient Authority. Korrektheit der Revocation ist sicherheitskritisch und wird
-mit Tests (Phase 3) und perspektivisch mit Modellprüfung abgesichert.
+Least privilege by construction; delegation and revocation via the CDT; no
+ambient authority. The correctness of revocation is security-critical and is
+secured with tests (phase 3) and, prospectively, with model checking.
 
-## Performanceauswirkungen
+## Performance implications
 
-Cap-Lookup ist ein Array-Index in CNode-Slots (O(Tiefe), klein). Der Fastpath
-(ADR 0004) cached aufgelöste Endpoint-Caps, um Lookups im Hot-Path zu vermeiden.
-Arena statt Allokationen pro Cap hält die Operationen alloc-frei und
-deterministisch.
+Cap lookup is an array index into CNode slots (O(depth), small). The fastpath
+(ADR 0004) caches resolved endpoint caps to avoid lookups in the hot path.
+Arena instead of allocations per cap keeps the operations alloc-free and
+deterministic.

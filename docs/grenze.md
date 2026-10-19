@@ -1,18 +1,18 @@
-# Die Grenz-Crates — was permissiv werden muss, und warum genau diese
+# The boundary crates — what has to become permissive, and why exactly these
 
-**Stand: 2026-08-09. UMGESETZT** — alle sieben Crates tragen `MIT OR Apache-2.0`. Der Kern bleibt
+**As of: 2026-08-09. IMPLEMENTED** — all seven crates carry `MIT OR Apache-2.0`. The core remains
 `AGPL-3.0-or-later`.
 
-Caprock ist `AGPL-3.0-or-later`. Alles, was ein **Programm ausserhalb des Kerns** linkt, ist damit
-eine Lizenzgrenze: eine PD, die gegen eine GPLv3-Crate baut, ist mit GPLv3-Code gelinkt — und dann
-hilft weder die Prozesstrennung noch die ABI-Ausnahme, denn beide handeln von der *Schnittstelle*,
-nicht vom *Linken*.
+Caprock is `AGPL-3.0-or-later`. Everything that a **program outside the kernel** links is thus
+a licence boundary: a PD that builds against a GPLv3 crate is linked with GPLv3 code — and then
+neither process separation nor the ABI exception helps, because both concern the *interface*,
+not the *linking*.
 
-Das ist dieselbe Grenze, für die Linux die **UAPI-Header-Ausnahme** hat.
+This is the same boundary for which Linux has the **UAPI header exception**.
 
-## Gemessen, nicht geschätzt: was Programme heute linken
+## Measured, not estimated: what programs link today
 
-| Programm | linkt |
+| Program | links |
 |---|---|
 | `init`, `hello`, `svc-demo` | `libcaprock` |
 | `wasmhost` | `libcaprock`, `wasmi` |
@@ -20,37 +20,37 @@ Das ist dieselbe Grenze, für die Linux die **UAPI-Header-Ausnahme** hat.
 | `virtio-blk` | `libcaprock`, `caprock-virtio`, `caprock-part`, `caprock-dma` |
 | `virtio-net` | `libcaprock`, `caprock-virtio` |
 
-## Muss permissiv werden (`MIT OR Apache-2.0`)
+## Must become permissive (`MIT OR Apache-2.0`)
 
-| Crate | warum |
+| Crate | why |
 |---|---|
-| `programs/libcaprock` | **das SDK. Jedes Programm linkt es** — ohne diese Zeile ist alles Weitere gegenstandslos |
-| `crates/caprock-abi` | Syscall-Nummern, Ergebniscodes, Registerbelegung. **Die ABI selbst** |
-| `crates/caprock-dma` | `DmaPool`/`DmaBuf` — jede Treiber-PD rechnet damit |
-| `crates/caprock-wait` | der `Park`-Trait, Mutex/Completion — jede PD mit mehreren Threads |
-| `crates/caprock-virtio` | `Region`, Deskriptor-Typestate, Transport — jede virtio-PD |
-| `crates/caprock-part` | GPT-Parser, in Dienst-PDs |
-| `crates/caprock-fat` | FAT16-Parser, ebenso |
+| `programs/libcaprock` | **the SDK. Every program links it** — without this line everything else is moot |
+| `crates/caprock-abi` | syscall numbers, result codes, register assignment. **The ABI itself** |
+| `crates/caprock-dma` | `DmaPool`/`DmaBuf` — every driver PD relies on it |
+| `crates/caprock-wait` | the `Park` trait, mutex/completion — every PD with several threads |
+| `crates/caprock-virtio` | `Region`, descriptor typestate, transport — every virtio PD |
+| `crates/caprock-part` | GPT parser, in service PDs |
+| `crates/caprock-fat` | FAT16 parser, likewise |
 
-**Sieben.** Alle sieben sind bereits abhängigkeitsfrei oder hängen nur untereinander — die
-Umstellung ist eine Zeile je `Cargo.toml` plus ein Lizenzhinweis, kein Umbau.
+**Seven.** All seven are already dependency-free or depend only on each other — the
+switch is one line per `Cargo.toml` plus a licence notice, not a rework.
 
-## Bleibt GPLv3 (Kern und Kernnahes)
+## Stays GPLv3 (core and core-adjacent)
 
 `kernel`, `caprock-sched`, `caprock-ipc`, `caprock-microkit`, `caprock-hal`, `caprock-cap`,
 `caprock-mem`, `caprock-slab`, `caprock-loader`, `caprock-trust`, `caprock-region`,
 `caprock-sync`, `caprock-dtb`.
 
-Kein Programm ausserhalb des Kerns linkt eines davon — das ist die Probe darauf, dass die Grenze
-an der richtigen Stelle liegt, und `tools/kernel-grenze.sh` hält sie ohnehin schon gegen den
-Quelltext.
+No program outside the kernel links any of these — that is the test that the boundary lies
+in the right place, and `tools/kernel-grenze.sh` already holds it against the
+source.
 
-## Der Zeitpunkt ist jetzt
+## The time is now
 
-Umlizenzieren braucht die Zustimmung **aller** Urheber. Solange das eine Person ist, ist es ein
-Commit; nach dem ersten gemergten fremden Beitrag ist es ein Einsammelprozess — und dann gilt
-dasselbe für jede künftige ABI-Ausnahme (s. `LICENSE-EXCEPTION.md`).
+Relicensing needs the consent of **all** authors. As long as that is one person, it is a
+commit; after the first merged outside contribution it is a collection process — and then the same
+applies to every future ABI exception (see `LICENSE-EXCEPTION.md`).
 
-**Umgesetzt am 2026-08-09.** Unter AGPL ist das nicht mehr nur sauber, sondern tragend: §13 knüpft
-die Copyleft-Pflicht an den **Betrieb**, und stünden die Grenz-Crates unter AGPL, wäre jede PD mit
-AGPL-Code gelinkt — die ABI-Ausnahme liefe leer, und jeder Kunden-Workload stünde unter §13-Verdacht.
+**Implemented on 2026-08-09.** Under the AGPL this is no longer merely clean but load-bearing: §13 ties
+the copyleft duty to **operation**, and if the boundary crates were under the AGPL, every PD would be linked
+with AGPL code — the ABI exception would run empty, and every customer workload would stand under §13 suspicion.

@@ -1,84 +1,84 @@
-# ADR 0006 — Hot-Reload-Architektur
+# ADR 0006 — Hot-reload architecture
 
-**Status:** umgesetzt (Phase 7) · **Datum:** 2026-06-23
+**Status:** implemented (phase 7) · **Date:** 2026-06-23
 
-> **Stand (Phase 7):** Hot-Reload ist implementiert und in QEMU verifiziert — ein
-> Server-PD wird im laufenden System ersetzt (Quiesce: Empfänger zurückziehen +
-> Recv-Cap entziehen → Swap: v2 starten + Recv-Cap auf *denselben* Endpoint
-> delegieren → Resume), ohne Kernel-Neustart, transparent für den Client (gleiche
-> Send-Cap, gleicher Endpoint). Primitive: `EndpointTable::retire_receiver`,
-> `PdTable::clear_cap`. **Noch offen:** Zustands-Checkpoint für stateful
-> Komponenten (Schritt 2 unten), generischer Reload-Dienst, Abräumen des alten
-> PD (TCB/Stack). Siehe `docs/phase-reports/phase-7.md`.
+> **State (phase 7):** hot reload is implemented and verified in QEMU — a
+> server PD is replaced in the running system (quiesce: withdraw receiver +
+> take away recv cap → swap: start v2 + delegate recv cap onto the *same* endpoint
+> → resume), without a kernel restart, transparent to the client (same
+> send cap, same endpoint). Primitives: `EndpointTable::retire_receiver`,
+> `PdTable::clear_cap`. **Still open:** state checkpoint for stateful
+> components (step 2 below), generic reload service, clean-up of the old
+> PD (TCB/stack). See `docs/phase-reports/phase-7.md`.
 
 ## Motivation
 
-Alles außer Kernel und Microkit-Runtime muss **ohne Kernel-Neustart** stoppbar,
-ersetzbar und neu ladbar sein: Treiber, Netzwerkstack, Dateisysteme, Dienste,
-Userland. Ein Kernel-Reboot dafür ist nie zulässig.
+Everything except the kernel and the Microkit runtime must be stoppable,
+replaceable and reloadable **without a kernel restart**: drivers, network stack, file systems, services,
+userland. A kernel reboot for this is never permissible.
 
-## Grundidee: Capabilities als stabile Identität, Komponente als austauschbarer Inhalt
+## Basic idea: capabilities as stable identity, component as exchangeable content
 
-Eine Komponente (z. B. ein Treiber) ist ein **Protection Domain** (Microkit-PD),
-das ausschließlich über Capabilities mit der Außenwelt verbunden ist: Endpoints
-(Dienste, die es anbietet/nutzt), Notifications (IRQs), Device- und
-Memory-Capabilities. Der **Capability-Graph ist die stabile Schnittstelle** —
-der konkrete Code dahinter ist austauschbar.
+A component (e.g. a driver) is a **protection domain** (Microkit PD)
+that is connected to the outside world exclusively via capabilities: endpoints
+(services it offers/uses), notifications (IRQs), device and
+memory capabilities. The **capability graph is the stable interface** —
+the concrete code behind it is exchangeable.
 
-## Analysierte Lösungsansätze
+## Approaches analysed
 
-### A) Prozess killen + neu starten, Clients verbinden neu
-- **−** Verbindungen brechen; Clients müssen Reconnect-Logik haben; Zustand geht
-  verloren; nicht transparent. Verworfen als Standard.
+### A) Kill the process + restart, clients reconnect
+- **−** Connections break; clients must have reconnect logic; state is
+  lost; not transparent. Rejected as the standard.
 
-### B) Endpoint-Rebind hinter stabiler Cap-Identität (gewählt)
-Der **Endpoint** eines Dienstes ist ein eigenständiges Kernelobjekt mit stabiler
-Capability. Beim Reload:
+### B) Endpoint rebind behind a stable cap identity (chosen)
+A service's **endpoint** is an independent kernel object with a stable
+capability. On reload:
 
-1. **Quiesce:** neue Requests am Endpoint werden gepuffert/geblockt (der Endpoint
-   bleibt bestehen, der Server wird nur abgekoppelt).
-2. **Drain/Checkpoint:** der alte PD beendet laufende Requests; exportiert
-   optional Zustand in eine **Memory-Cap** (übergeben an den Nachfolger).
-3. **Swap:** neuer PD wird geladen, erhält dieselben Device-/Memory-/Endpoint-Caps
-   (Re-Bind) und den Checkpoint.
-4. **Resume:** Endpoint wird wieder an den neuen PD gebunden; gepufferte Requests
-   laufen weiter. Clients merken nichts (gleiche Cap, gleicher Endpoint).
+1. **Quiesce:** new requests at the endpoint are buffered/blocked (the endpoint
+   remains, the server is merely decoupled).
+2. **Drain/checkpoint:** the old PD finishes running requests; optionally exports
+   state into a **memory cap** (handed to the successor).
+3. **Swap:** a new PD is loaded, receives the same device/memory/endpoint caps
+   (re-bind) and the checkpoint.
+4. **Resume:** the endpoint is bound to the new PD again; buffered requests
+   continue. Clients notice nothing (same cap, same endpoint).
 
-- **+** Transparent für Clients (stabile Cap/Endpoint-Identität).
-- **+** Sauber capability-modelliert: Reload = Caps vom alten PD `revoke`n und an
-  neuen PD `delegate`n; Kontrolle hat ein **Reload-Manager** mit der nötigen
-  Autorität (selbst ein Userland-Dienst mit besonderen Caps).
-- **+** Zustandsübergabe via Memory-Cap ist im SAS zero-copy (ADR 0002/0004).
-- **−** Dienste müssen ein **Quiesce/Checkpoint-Protokoll** unterstützen, um
-  Zustand nicht zu verlieren (stateless Treiber sind trivial; stateful brauchen
-  Kooperation).
+- **+** Transparent for clients (stable cap/endpoint identity).
+- **+** Cleanly capability-modelled: reload = `revoke` caps from the old PD and `delegate` them to the
+  new PD; control lies with a **reload manager** holding the necessary
+  authority (itself a userland service with special caps).
+- **+** State hand-over via memory cap is zero-copy in the SAS (ADR 0002/0004).
+- **−** Services must support a **quiesce/checkpoint protocol** so as not to lose
+  state (stateless drivers are trivial; stateful ones need
+  cooperation).
 
-### C) Versionierte Module mit Live-Patching im selben PD (Theseus-Stil)
-- **+** Feingranular, kein PD-Wechsel.
-- **−** Erfordert tiefe Toolchain-/Lader-Integration; später als Optimierung
-  denkbar, jetzt zu komplex. Zurückgestellt.
+### C) Versioned modules with live patching in the same PD (Theseus style)
+- **+** Fine-grained, no PD switch.
+- **−** Requires deep toolchain/loader integration; conceivable later as an optimisation,
+  too complex now. Postponed.
 
-## Entscheidung
+## Decision
 
-**Ansatz B.** Hot-Reload über stabile Endpoint-/Cap-Identität: Quiesce →
-Drain/Checkpoint → Swap (Cap-Revoke/Delegate) → Resume. Der Kernel liefert die
-Primitiven (Endpoint-Quiesce/-Rebind, Cap-Revoke/-Delegate, Notification-Umlenkung);
-ein **Reload-Manager im Userland** orchestriert die Policy. Kernel und
-Microkit-Runtime selbst sind **nicht** hot-reloadbar (sie sind die TCB).
+**Approach B.** Hot reload via stable endpoint/cap identity: quiesce →
+drain/checkpoint → swap (cap revoke/delegate) → resume. The kernel supplies the
+primitives (endpoint quiesce/rebind, cap revoke/delegate, notification redirection);
+a **reload manager in userland** orchestrates the policy. The kernel and the
+Microkit runtime themselves are **not** hot-reloadable (they are the TCB).
 
-## Sicherheitsauswirkungen
+## Security implications
 
-- Der Reload-Manager ist eine privilegierte Komponente (definierte Cap-Menge) —
-  Least Privilege strikt einhalten; er darf nur die Caps der zu ersetzenden
-  Komponente umhängen.
-- **Revocation-Korrektheit** ist sicherheitskritisch: nach dem Swap dürfen keine
-  „dangling“ Caps des alten PD auf Geräte/Speicher verbleiben (CDT-Revoke, ADR 0003).
-- Ein kompromittierter Treiber kann (ohne MMU-Isolation, ADR 0002) im Rahmen
-  *seiner* Caps Schaden anrichten, aber Hot-Reload erlaubt schnelles Ersetzen als
-  Reaktion.
+- The reload manager is a privileged component (defined cap set) —
+  strictly observe least privilege; it may only re-hang the caps of the component
+  to be replaced.
+- **Revocation correctness** is security-critical: after the swap no
+  "dangling" caps of the old PD may remain on devices/memory (CDT revoke, ADR 0003).
+- A compromised driver can (without MMU isolation, ADR 0002) cause damage within
+  *its* caps, but hot reload permits quick replacement as a
+  reaction.
 
-## Performanceauswirkungen
+## Performance implications
 
-Quiesce-Fenster sollte klein sein; gepufferte Requests verursachen kurze
-Latenzspitzen während des Swaps. Zero-Copy-Checkpoint via Memory-Cap hält den
-Zustandstransfer billig. Kein Kernel-Reboot → Verfügbarkeit bleibt erhalten.
+The quiesce window should be small; buffered requests cause short
+latency spikes during the swap. Zero-copy checkpoint via memory cap keeps the
+state transfer cheap. No kernel reboot → availability is preserved.

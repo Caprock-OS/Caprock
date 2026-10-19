@@ -1,36 +1,35 @@
-# ADR 0008 — DMA-Capabilities mit SMMUv3-Erzwingung hinter generischer DmaEnforcer-Abstraktion
+# ADR 0008 — DMA capabilities with SMMUv3 enforcement behind a generic DmaEnforcer abstraction
 
-Status: **Akzeptiert** (ext-23, umgesetzt D0–D5)
+Status: **Accepted** (ext-23, implemented D0–D5)
 
-## Kontext
+## Context
 
-Mit ext-22 besitzt Caprock drei kernel-getrennte Domänen und Hardware-Caps für **MMIO** und
-**IRQ**. Bewusst aufgeschoben war **DMA** — die einzige HW-Cap-Kategorie, bei der ein
-bus-masterndes Gerät **direkt** Physikspeicher liest/schreibt, **vorbei an der CPU-MMU**. Ein
-HardwareLand-Backend, das die DMA-Register eines Geräts programmiert, könnte das Gerät sonst
-Kernel- oder Fremddomänenspeicher überschreiben lassen, obwohl die *eigene* VSpace des Backends
-isoliert ist — ein direkter Bruch von Isolations-Invariante #1.
+With ext-22 Caprock has three kernel-separated domains and hardware caps for **MMIO** and
+**IRQ**. **DMA** was deliberately deferred — the only HW cap category where a
+bus-mastering device reads/writes physical memory **directly**, **bypassing the CPU MMU**. A
+HardwareLand backend that programs a device's DMA registers could otherwise let the device
+overwrite kernel or foreign-domain memory although the backend's *own* VSpace
+is isolated — a direct breach of isolation invariant #1.
 
-Langfristiges Ziel sind reale Plattformen (STM32MP25-Serie u. a.) mit voller hardwaregestützter
-DMA-Isolation per ARM SMMUv3.
+The long-term goal is real platforms (STM32MP25 series among others) with full hardware-backed
+DMA isolation via ARM SMMUv3.
 
-## Entscheidung
+## Decision
 
-**Der DMA-Mechanismus (`DmaCap`) ist vom Enforcement-Treiber (`DmaEnforcer`) entkoppelt; SMMUv3
-ist die Implementierung, nicht die Architektur.**
+**The DMA mechanism (`DmaCap`) is decoupled from the enforcement driver (`DmaEnforcer`); SMMUv3
+is the implementation, not the architecture.**
 
-### DMA-Mechanismus — `DmaCap` (SMMU-agnostisch)
-`ObjectKind::Dma { phys, len }` ist die Autorität über eine **kernel-ausgeschnittene,
-kontiguierliche RAM-Region**, die als DMA-Puffer dient. Nur kernelseitig geprägt (kein
-User-Syscall fordert beliebige physische Bereiche an), nur in **HardwareLand** installierbar
-(`kind_is_hardware` schließt `Dma` ein → `Caps::domain_audit` Code 1). Das Capability-Modell,
-`install_dma_cap`, `alloc_dma_region`, das Mapping (EL0-RW **Normal-Non-Cacheable** in die
-isolierte Backend-VSpace) und die Backend-Schnittstellen sind **ohne jeden SMMU-Bezug**
-entworfen.
+### DMA mechanism — `DmaCap` (SMMU-agnostic)
+`ObjectKind::Dma { phys, len }` is the authority over a **kernel-carved,
+contiguous RAM region** serving as a DMA buffer. Minted kernel-side only (no
+user syscall requests arbitrary physical ranges), installable only in **HardwareLand**
+(`kind_is_hardware` includes `Dma` → `Caps::domain_audit` code 1). The capability model,
+`install_dma_cap`, `alloc_dma_region`, the mapping (EL0-RW **normal non-cacheable** into the
+isolated backend VSpace) and the backend interfaces are designed **without any SMMU reference**.
 
-**Anders als Mmio/Irq ist DMA echtes RAM.** Die Finalisierung (`delete_leaf`) gibt die Region via
-`free_region` zurück — DMA-use-after-free-sicher, **weil** die Revoke-Reihenfolge garantiert,
-dass vorher kein Gerät mehr in die Region schreiben kann:
+**Unlike Mmio/Irq, DMA is real RAM.** Finalisation (`delete_leaf`) returns the region via
+`free_region` — DMA-use-after-free-safe **because** the revoke order guarantees
+that no device can write into the region any more beforehand:
 
 ```
 enforcer.disable_dma(binding)   // Durchsetzung entziehen (SMMU: STE invalidieren + TLBI + SYNC)
@@ -40,82 +39,82 @@ VSpace-Unmap (zurück auf EL1-only) + flush_asid
 free_region(...)                // erst jetzt RAM freigeben
 ```
 
-### Enforcement — `DmaEnforcer`-Trait (IOMMU-neutral)
-Eine kernel-interne Trait-Abstraktion: `init` / `enable_dma(binding)` / `disable_dma(binding)` /
-`audit`. Eine `DmaBinding` trägt nur generische IDs (StreamID, PhysRegion, Backend-PD), **keine**
-SMMU-Registerdetails. Die einzige Stelle, die SMMU-Register/STE/CD/Queues kennt, ist
-`SmmuV3Enforcer` (+ `hal::smmu`). Der öffentliche DMA-Pfad spricht ausschließlich das Trait an.
-Ein künftiger `NullIommuEnforcer` oder anderer IOMMU-Treiber implementiert dasselbe Trait, **ohne**
-öffentlichen Code (DmaCap, install_dma_cap, Mapping, Treiber, HardwareLand, Audits) zu berühren.
+### Enforcement — `DmaEnforcer` trait (IOMMU-neutral)
+A kernel-internal trait abstraction: `init` / `enable_dma(binding)` / `disable_dma(binding)` /
+`audit`. A `DmaBinding` carries only generic IDs (StreamID, PhysRegion, backend PD), **no**
+SMMU register details. The only place that knows SMMU registers/STE/CD/queues is
+`SmmuV3Enforcer` (+ `hal::smmu`). The public DMA path speaks only the trait.
+A future `NullIommuEnforcer` or other IOMMU driver implements the same trait **without**
+touching public code (DmaCap, install_dma_cap, mapping, drivers, HardwareLand, audits).
 
-### SMMUv3-Implementierung (Stage-1, Default-Abort)
-`SmmuV3Enforcer` bringt die SMMU hoch (Command-/Event-Queue + lineare Stream-Tabelle, CR0
-SMMUEN|CMDQEN|EVENTQEN). Die Stream-Tabelle ist genullt → **Default-Abort** (jeder Stream
-abortet, bis eine STE installiert wird). `enable_dma` installiert je gebundenem Gerät genau eine
-**STE → CD → Stage-1-Pagetable** (VMSAv8-64, T0SZ=25, 4-KiB-Granule), die **ausschließlich** die
-DmaCap-Region identitäts-abbildet; alles andere bleibt ungemappt → Translation-Fault (Event-Queue).
+### SMMUv3 implementation (stage 1, default abort)
+`SmmuV3Enforcer` brings the SMMU up (command/event queue + linear stream table, CR0
+SMMUEN|CMDQEN|EVENTQEN). The stream table is zeroed → **default abort** (every stream
+aborts until an STE is installed). `enable_dma` installs, per bound device, exactly one
+**STE → CD → stage-1 page table** (VMSAv8-64, T0SZ=25, 4 KiB granule) that **exclusively**
+identity-maps the DmaCap region; everything else stays unmapped → translation fault (event queue).
 
-### Adress-Programmierung backend-direkt, kernel-auditiert
-virtio legt Buffer-Physadressen in RAM-**Deskriptoren** ab (nicht in MMIO-Registern), daher greift
-keine kernel-mediierte Register-Prüfung. Stattdessen baut das vertrauenswürdige Backend Ringe mit
-Physadressen aus seiner DmaCap; die SMMU ist die hardwareseitige erzwingende Instanz.
+### Address programming backend-direct, kernel-audited
+virtio puts buffer physical addresses into RAM **descriptors** (not into MMIO registers), so
+no kernel-mediated register check applies. Instead the trusted backend builds rings with
+physical addresses from its DmaCap; the SMMU is the hardware-side enforcing instance.
 
-## Zweistufige Durchsetzung (Nutzer-Entscheidung)
+## Two-level enforcement (user decision)
 
-Während der Validierung zeigte sich (per QEMU-SMMU-Tracing, s. u.), dass QEMU für **emulierte**
-Geräte den DMA nicht durch den SMMU-Translate-Pfad routet — die hardwareseitige Erzwingung ist
-unter QEMU mit einem emulierten Gerät nicht *vorführbar*. Daraufhin wurde die Architektur
-zweistufig ausgelegt:
+During validation it turned out (via QEMU SMMU tracing, see below) that for **emulated**
+devices QEMU does not route DMA through the SMMU translate path — hardware-side enforcement
+cannot be *demonstrated* under QEMU with an emulated device. The architecture was thereupon
+laid out in two levels:
 
-- **Level 1 — Software-Disziplin (hardware-unabhängig, demonstrierbar):** der vertrauenswürdige
-  Treiber validiert via `dma_addr_in_region` **jede** Geräte-DMA-Deskriptor-Adresse gegen die
-  DmaCap, **bevor** er das Gerät programmiert. Eine Out-of-Window-Adresse wird abgewiesen → das
-  Gerät wird gar nicht erst programmiert. Wirkt auf jeder Plattform; in QEMU im Testlauf bewiesen.
-- **Level 2 — SMMUv3 (Hardware-Backstop):** die installierte Stage-1-STE beschränkt den
-  tatsächlichen Bus-Zugriff des Geräts hardwareseitig — der Backstop für den Fall, dass ein
-  kompromittiertes/fehlerhaftes Backend die Software-Prüfung umgeht. Greift auf realer Hardware.
+- **Level 1 — software discipline (hardware-independent, demonstrable):** the trusted
+  driver validates via `dma_addr_in_region` **every** device DMA descriptor address against the
+  DmaCap **before** it programs the device. An out-of-window address is rejected → the
+  device is not even programmed. Works on every platform; proved in the QEMU test run.
+- **Level 2 — SMMUv3 (hardware backstop):** the installed stage-1 STE restricts the
+  device's actual bus access on the hardware side — the backstop for the case that a
+  compromised/faulty backend bypasses the software check. Takes effect on real hardware.
 
-## Verglichene Alternativen
+## Alternatives compared
 
-- **Keine IOMMU, nur Software:** tractable, aber keine HW-Garantie. **Verworfen** (Sicherheit #1).
-- **SMMU-zwingend (ursprüngliche Festlegung):** höchste Garantie, aber nicht portabel auf SoCs
-  ohne IOMMU und in QEMU mit emulierten Geräten nicht demonstrierbar. **Ersetzt** durch das
-  zweistufige Modell (Level 1 demonstrierbar + portabel, Level 2 als HW-Backstop).
-- **Stage-2 / nested SMMU:** mächtiger (Gast-Virtualisierung), hier unnötig. **Verworfen.**
+- **No IOMMU, software only:** tractable, but no HW guarantee. **Rejected** (security #1).
+- **SMMU mandatory (original stipulation):** highest guarantee, but not portable to SoCs
+  without an IOMMU and not demonstrable in QEMU with emulated devices. **Replaced** by the
+  two-level model (level 1 demonstrable + portable, level 2 as HW backstop).
+- **Stage 2 / nested SMMU:** more powerful (guest virtualisation), unnecessary here. **Rejected.**
 
-## Sicherheits-Invarianten (von Oracles abgesichert)
+## Security invariants (secured by oracles)
 
-`dma_audit()` (in `ipc_audit` als Code 40+ aggregiert):
-1. DmaCap-Regionen page-aligned, im mappbaren GiB-1-Fenster, disjunkt vom Kernel-Image
-   (`floor = kernel_end`) — eine Region über dem Kernel-Image wird abgewiesen.
-2. Zwei verschiedene DmaCap-Regionen überlappen nie (objektgranular, Cap-Kopien zählen einfach).
-3. Revoke-Reihenfolge (`disable_dma` → Unmap → free) → kein DMA-use-after-free.
-4. `enforcer.audit()`: keine globalen SMMU-Fehler (GERROR), Event-Queue im Normalbetrieb leer.
+`dma_audit()` (aggregated in `ipc_audit` as code 40+):
+1. DmaCap regions page-aligned, in the mappable GiB-1 window, disjoint from the kernel image
+   (`floor = kernel_end`) — a region above the kernel image is rejected.
+2. Two different DmaCap regions never overlap (object-granular, cap copies count once).
+3. Revoke order (`disable_dma` → unmap → free) → no DMA use-after-free.
+4. `enforcer.audit()`: no global SMMU errors (GERROR), event queue empty in normal operation.
 
-Ressourcen-Baseline (hwfuzz): MMIO/IRQ-Delete fasst den RAM-Allokator **nicht** an (Gerät != RAM);
-**DMA**-alloc ↔ free ist **balanciert** (Region zurück zur Baseline je Epoche).
+Resource baseline (hwfuzz): MMIO/IRQ delete does **not** touch the RAM allocator (device != RAM);
+**DMA** alloc ↔ free is **balanced** (region back to baseline per epoch).
 
-## Befund: QEMU-SMMUv3 + emulierte Geräte
+## Finding: QEMU SMMUv3 + emulated devices
 
-Per QEMU-SMMU-Tracing (`-trace 'smmu*'`, 8 Läufe) belegt: QEMU 11 erzeugt zwar die IOMMU-Memory-
-Regions (`smmu_add_mr`) und verarbeitet alle SMMU-Commands (CR0, CMD_SYNC, CFGI_STE, TLBI), routet
-aber den DMA **emulierter** Geräte (hier virtio-rng-pci) **nicht** durch `smmuv3_translate` — **null**
-`smmuv3_translate*`/`smmu_ptw*`/`decode_cd`-Events, sowohl als integrierter Bus-0-Endpunkt als auch
-hinter einem `pcie-root-port` (Bus 1, RID 0x100), und selbst mit einer **V=0**-STE (die laut Spec
-aborten müsste) gelingt der DMA. Ursache: QEMUs emulierte SMMUv3 übersetzt für rein-emulierte Geräte
-(ohne IOMMU-MAP/UNMAP-Notifier, wie sie nur VFIO-Passthrough registriert) den Bus-Zugriff nicht.
+Shown via QEMU SMMU tracing (`-trace 'smmu*'`, 8 runs): QEMU 11 does create the IOMMU memory
+regions (`smmu_add_mr`) and processes all SMMU commands (CR0, CMD_SYNC, CFGI_STE, TLBI), but does
+**not** route the DMA of **emulated** devices (here virtio-rng-pci) through `smmuv3_translate` — **zero**
+`smmuv3_translate*`/`smmu_ptw*`/`decode_cd` events, both as an integrated bus-0 endpoint and
+behind a `pcie-root-port` (bus 1, RID 0x100), and even with a **V=0** STE (which according to the spec
+would have to abort) the DMA succeeds. Cause: QEMU's emulated SMMUv3 does not translate the bus access for purely emulated devices
+(without IOMMU MAP/UNMAP notifiers, which only VFIO passthrough registers).
 
-**Konsequenz:** Die Level-2-Hardware-Erzwingung ist unter QEMU mit emulierten Geräten **nicht
-beobachtbar** (`cj_smmu_enforced=false`, ehrlich berichtet). Die Stage-1-Konfiguration ist dennoch
-korrekt installiert und würde auf realer Hardware greifen. Die demonstrierbare Erzwingung im
-Testlauf leistet Level 1 (Software-Bounds); der Kronjuwel-Test zeigt zusätzlich, dass die
-Software-Prüfung lasttragend ist (ohne sie schreibt das Gerät das Out-of-Window-Ziel).
+**Consequence:** the level-2 hardware enforcement is **not observable** under QEMU with emulated devices
+(`cj_smmu_enforced=false`, reported honestly). The stage-1 configuration is nevertheless
+installed correctly and would take effect on real hardware. The demonstrable enforcement in the
+test run is provided by level 1 (software bounds); the crown-jewel test additionally shows that the
+software check is load-bearing (without it the device writes the out-of-window target).
 
-## Konsequenzen
+## Consequences
 
-- DMA-fähige Treiber (z. B. NVMe, NIC) leben als HardwareLand-Backends mit DmaCap + MmioCap;
-  die SMMU beschränkt den Bus-Zugriff auf realer HW, die Software-Disziplin auf jeder Plattform.
-- Portabel: dieselbe Architektur/API auf SoCs mit **und** ohne SMMU; der Enforcer ist austauschbar.
-- Bewusst aufgeschoben: Stage-2/nested, mehrere gleichzeitige DMA-Geräte, Hotplug, Scatter-Gather
-  über mehrere DmaCaps, ein realer `NullIommuEnforcer`, Verifikation der Hardware-Erzwingung auf
-  echter SMMU-Hardware (oder QEMU-VFIO-Pfad).
+- DMA-capable drivers (e.g. NVMe, NIC) live as HardwareLand backends with DmaCap + MmioCap;
+  the SMMU restricts bus access on real HW, the software discipline on every platform.
+- Portable: the same architecture/API on SoCs **with** and without an SMMU; the enforcer is exchangeable.
+- Deliberately deferred: stage 2/nested, several simultaneous DMA devices, hotplug, scatter-gather
+  across several DmaCaps, a real `NullIommuEnforcer`, verification of the hardware enforcement on
+  real SMMU hardware (or the QEMU VFIO path).

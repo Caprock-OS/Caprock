@@ -1,35 +1,35 @@
-# ADR 0017 — Formale funktionale Verifikation der Region-Runtime (Verus, Phase 3)
+# ADR 0017 — Formal functional verification of the region runtime (Verus, phase 3)
 
-Status: **angenommen** · Datum: 2026-06-27 · Phase 3 der funktionalen Verifikation.
-Bezug: ADR 0010 (Region-Runtime + Prozess-Heap), ADR 0015 (Verifikationsansatz), `Verification/region-runtime/`.
+Status: **accepted** · Date: 2026-06-27 · Phase 3 of functional verification.
+Reference: ADR 0010 (region runtime + process heap), ADR 0015 (verification approach), `Verification/region-runtime/`.
 
-## Kontext
+## Context
 
-Die Region-Runtime (`caprock-region`) ist die **einzige** Crate mit Speicher-`unsafe` im Userland-Pfad;
-ihre **Speichersicherheit** (RegionView-Zugriffe nie OOB) ist bereits mit **Kani** bewiesen
-(`docs/verification.md`). Phase 3 ergaenzt die **funktionale** Schicht: die **Ressourcen-Bilanz** des
-Allokators — Konservierung, Ownership, Balance —, die zur Laufzeit von `churn`/`sasheap`
-(`total_free`-Baseline) geprueft wird.
+The region runtime (`caprock-region`) is the **only** crate with memory `unsafe` in the userland path;
+its **memory safety** (RegionView accesses never OOB) has already been proved with **Kani**
+(`docs/verification.md`). Phase 3 adds the **functional** layer: the allocator's **resource balance** —
+conservation, ownership, balance —, which is checked at run time by `churn`/`sasheap`
+(`total_free` baseline).
 
-## Variantenvergleich
+## Comparison of variants
 
-| Variante | Beschreibung | Bewertung |
+| Variant | Description | Assessment |
 |---|---|---|
-| V1 voller Hybrid-Allocator (Slabs+Bump) | reale Allokator-Datenstrukturen modellieren | gross; die Slab-/Bump-Geometrie ist Speichersicherheit (Kani) + Disjunktheit (vgl. dma_disjoint), nicht die Kern-**Bilanz** |
-| **V2 Bilanz-Modell (gewählt)** | Pool als `total`/`free` + Regionen-Seq; **Konservierung** `free + Σ(lebende) == total`, alloc/free dagegen | erfasst genau die Funktional-Eigenschaft (kein Leak, keine Doppel-Freigabe, Balance); klein + faithful |
+| V1 full hybrid allocator (slabs+bump) | model the real allocator data structures | large; the slab/bump geometry is memory safety (Kani) + disjointness (cf. dma_disjoint), not the core **balance** |
+| **V2 balance model (chosen)** | pool as `total`/`free` + region seq; **conservation** `free + Σ(live) == total`, alloc/free against it | captures exactly the functional property (no leak, no double free, balance); small + faithful |
 
-## Entscheidung
+## Decision
 
-**V2** — die **Konservierungs-Invariante** `free + Σ(lebende Regionen) == total` modellieren und
-beweisen, dass `alloc`/`free_region` sie **erhalten**, dass `free_region` eine **lebende** Region
-verlangt (keine Doppel-Freigabe = lineare Ownership) und dass `alloc(n)`+`free` `free` **exakt**
-wiederherstellt (**Balance**, kein Leak). Abstraktes Modell; realer Code unverändert; die
-Speichersicherheit der RegionViews liefert Kani.
+**V2** — model the **conservation invariant** `free + Σ(live regions) == total` and
+prove that `alloc`/`free_region` **preserve** it, that `free_region` requires a **live** region
+(no double free = linear ownership) and that `alloc(n)`+`free` restores `free` **exactly**
+(**balance**, no leak). Abstract model; real code unchanged; the
+memory safety of the RegionViews is delivered by Kani.
 
-## Konsequenzen
+## Consequences
 
-- **Positiv:** die Ressourcen-Bilanz (Laufzeit-`total_free`-Checks) wird von „geprueft" zu „bewiesen";
-  Ownership/no-double-free formalisiert. Schichtung: Kani (Speichersicherheit) + Verus (Bilanz).
-- **Grenzen/offen:** Hybrid-Allocator-**Geometrie** (Slab/Bump-Disjunktheit), Zero-Copy-Invarianten
-  (ein Frame in zwei VSpaces, cap-gewaehrt), Hot-Reload-Zustandsuebergabe — spaetere Stufen; die
-  RegionSource-grow/shrink ist die naechste (baut auf der Konservierung auf).
+- **Positive:** the resource balance (run-time `total_free` checks) goes from "checked" to "proved";
+  ownership/no-double-free formalised. Layering: Kani (memory safety) + Verus (balance).
+- **Limits/open:** hybrid-allocator **geometry** (slab/bump disjointness), zero-copy invariants
+  (one frame in two VSpaces, cap-granted), hot-reload state hand-over — later stages; the
+  RegionSource grow/shrink is the next one (builds on the conservation).

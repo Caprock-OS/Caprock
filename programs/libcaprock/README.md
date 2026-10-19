@@ -1,35 +1,35 @@
-# libcaprock — Userland-SDK (ext-26)
+# libcaprock — userland SDK (ext-26)
 
-Minimal-SDK für extern geladene Caprock-EL0-Programme: die **Syscall-Stubs** + ein **Panik-
-Handler**. Bewusst **ohne** Abhängigkeit vom Kernel-Workspace (die ABI-Konstanten sind dupliziert) —
-ein extern gebautes Programm hängt nur von diesem SDK ab.
+Minimal SDK for externally loaded Caprock EL0 programs: the **syscall stubs** + a **panic
+handler**. Deliberately **without** a dependency on the kernel workspace (the ABI constants are duplicated) —
+an externally built program depends only on this SDK.
 
-## Syscall-ABI
+## Syscall ABI
 
-`svc #0`, Register: `x0`=Nr, `x1`=lokaler Cap-Index, `x2..x5`=Nachricht, `x6`=Tag. Rückgabe:
-`x0`=Ergebnis, `x1`=Badge, `x2..x5`=Antwort, `x6`=Tag. Der Kernel restauriert beim `eret` alle
-Register außer `x0..x6`.
+`svc #0`, registers: `x0`=number, `x1`=local cap index, `x2..x5`=message, `x6`=tag. Return:
+`x0`=result, `x1`=badge, `x2..x5`=reply, `x6`=tag. On `eret` the kernel restores all
+registers except `x0..x6`.
 
 ## API
 
-| Funktion | Syscall | Zweck |
+| Function | Syscall | Purpose |
 |---|---|---|
-| `invoke(nr, cap, msg, tag) -> Ret` | — | Roh-Syscall |
-| `signal(cap, badge)` | `SIGNAL` | Notification signalisieren (Badge = **Cap-Badge**, nicht das Argument) |
-| `wait(cap) -> u64` | `WAIT` | auf Notification warten (gibt akkumuliertes Badge) |
-| `call(cap, msg) -> Ret` | `CALL` | synchroner RPC (senden + auf Antwort warten) |
-| `recv(cap) -> Ret` | `RECV` | auf Aufruf warten (Server) |
-| `reply(cap, msg)` | `REPLY` | letzten Aufrufer beantworten |
-| `yield_now()` | `YIELD` | freiwilliger Zeitscheibenabtritt |
-| `park() -> !` | `PARK` | sich dauerhaft blockieren |
-| `exit() -> !` | `EXIT` | sich beenden (Stack/TCB/Pool-Slot zurück) |
+| `invoke(nr, cap, msg, tag) -> Ret` | — | raw syscall |
+| `signal(cap, badge)` | `SIGNAL` | signal a notification (badge = **cap badge**, not the argument) |
+| `wait(cap) -> u64` | `WAIT` | wait for a notification (returns the accumulated badge) |
+| `call(cap, msg) -> Ret` | `CALL` | synchronous RPC (send + wait for reply) |
+| `recv(cap) -> Ret` | `RECV` | wait for a call (server) |
+| `reply(cap, msg)` | `REPLY` | answer the last caller |
+| `yield_now()` | `YIELD` | voluntary relinquishing of the time slice |
+| `park() -> !` | `PARK` | block oneself permanently |
+| `exit() -> !` | `EXIT` | terminate oneself (stack/TCB/pool slot returned) |
 
-Weitere Syscall-Nummern (`MAP`/`UNMAP`/`PDCTL`/`LOAD`/`KILL`) sind in `sys::*` definiert; höhere
-Wrapper folgen nach Bedarf. Ein geladener Prozess kann nur Caps benutzen, die ihm der Loader (per
-Manifest/Delegation, cap-gated) endowt hat.
+Further syscall numbers (`MAP`/`UNMAP`/`PDCTL`/`LOAD`/`KILL`) are defined in `sys::*`; higher
+wrappers follow as needed. A loaded process can only use caps that the loader endowed it with (via
+manifest/delegation, cap-gated).
 
 ## Entry
 
-Jedes Programm definiert `#[no_mangle] extern "C" fn _start(arg: usize) -> !`. Der Kernel startet
-es mit gesetztem SP (eigener Stack in der isolierten VSpace) und übergibt eine Boot-Info in `x0`.
-Der Panik-Handler dieses SDK parkt still (kein Heap/Console im EL0-Programm).
+Every program defines `#[no_mangle] extern "C" fn _start(arg: usize) -> !`. The kernel starts
+it with SP set (own stack in the isolated VSpace) and passes a boot info in `x0`.
+This SDK's panic handler parks silently (no heap/console in the EL0 program).

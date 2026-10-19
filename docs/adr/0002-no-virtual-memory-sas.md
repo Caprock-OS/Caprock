@@ -1,161 +1,161 @@
-# ADR 0002 — Kein virtueller RAM: Single-Address-Space mit Capability-Isolation
+# ADR 0002 — No virtual RAM: single address space with capability isolation
 
-**Status:** akzeptiert (Phase 0, umzusetzen ab Phase 1) · **Datum:** 2026-06-23
+**Status:** accepted (phase 0, to be implemented from phase 1) · **Date:** 2026-06-23
 
-Dies ist die *definierende* Architekturentscheidung von Caprock und der größte
-Unterschied zu seL4.
+This is the *defining* architecture decision of Caprock and the biggest
+difference from seL4.
 
-## Anforderung (aus der Spezifikation)
+## Requirement (from the specification)
 
-- Jede Speicheradresse ist eine echte physische Adresse.
-- Keine per-Prozess-Adressräume.
-- Keine klassische MMU-basierte Speicherisolation.
-- Keine virtuelle Speicherübersetzung.
-- Speichersicherheit ausschließlich über Capabilities + Besitzrechte + Rust.
+- Every memory address is a real physical address.
+- No per-process address spaces.
+- No classic MMU-based memory isolation.
+- No virtual memory translation.
+- Memory safety exclusively via capabilities + ownership rights + Rust.
 
-## Hintergrund: was „MMU aus“ auf aarch64 real bedeutet
+## Background: what "MMU off" really means on aarch64
 
-Ein wichtiger Hardware-Fakt prägt die Entscheidung: Ist die MMU auf aarch64
-**vollständig deaktiviert** (`SCTLR_ELx.M = 0`), behandelt die CPU **jeden**
-Datenzugriff als `Device-nGnRnE`. Konsequenzen:
+An important hardware fact shapes the decision: if the MMU on aarch64 is
+**completely disabled** (`SCTLR_ELx.M = 0`), the CPU treats **every**
+data access as `Device-nGnRnE`. Consequences:
 
-- **Keine Caches** → jeder Zugriff geht in den DRAM. Faktor 10–50× langsamer.
-- **Keine Speculation, kein Reordering, kein Write-Combining.**
-- **Strikte Ausrichtung erzwungen** → unausgerichtete Zugriffe faulten.
+- **No caches** → every access goes to DRAM. A factor of 10–50× slower.
+- **No speculation, no reordering, no write combining.**
+- **Strict alignment enforced** → unaligned accesses fault.
 
-„MMU komplett aus“ widerspricht damit direkt dem Ziel *hochperformant*.
+"MMU completely off" thus directly contradicts the goal *high-performance*.
 
-## Analysierte Lösungsansätze
+## Approaches analysed
 
-### A) MMU vollständig deaktiviert (wörtliche Auslegung)
-- **+** Maximal einfach konzeptionell; Adresse == Phys-Adresse trivial.
-- **+** Kein Page-Table-Code, keine TLB-Verwaltung.
-- **− Performance katastrophal** (alles uncached, siehe oben).
-- **−** Strikte Ausrichtung überall nötig; kein `W^X`/NX, keine
-  Read-only-Durchsetzung von Code/`.rodata` möglich.
-- **Bewertung:** nur als Phase-0-Übergangszustand akzeptabel, nicht als Ziel.
+### A) MMU completely disabled (literal interpretation)
+- **+** Maximally simple conceptually; address == physical address trivially.
+- **+** No page-table code, no TLB management.
+- **− Performance catastrophic** (everything uncached, see above).
+- **−** Strict alignment necessary everywhere; no `W^X`/NX, no
+  read-only enforcement of code/`.rodata` possible.
+- **Assessment:** acceptable only as a phase-0 transitional state, not as a goal.
 
-### B) MMU an, **eine einzige globale Identity-Map**, Caches an (gewählt)
-Die MMU ist aktiv, aber es gibt **genau einen** Übersetzungssatz für das ganze
-System, der **virtuell == physisch** abbildet (Identity-/Flat-Mapping). Es gibt
-**keine per-Prozess-Page-Tables und keinen Adressraumwechsel** beim
-Kontextwechsel (kein `TTBR`-Wechsel, kein ASID-Roundtrip).
+### B) MMU on, **a single global identity map**, caches on (chosen)
+The MMU is active, but there is **exactly one** translation set for the whole
+system, mapping **virtual == physical** (identity/flat mapping). There are
+**no per-process page tables and no address-space switch** on a
+context switch (no `TTBR` switch, no ASID round trip).
 
-- **+** Adresse, die ein Prozess sieht, **ist** die physische Adresse — die
-  Spezifikationsanforderung „echte physische Adresse / keine Übersetzung“ bleibt
-  semantisch erfüllt (Identity-Map = keine *Umrechnung* von Bedeutung).
-- **+** Caches/Speculation aktiv → **volle Performance**.
-- **+** Kein TTBR-Wechsel beim Context-Switch → **sehr niedrige Switch-Latenz**
-  und **keine TLB-Shootdowns** zwischen Prozessen (gut für Determinismus und
-  Multicore-Skalierung).
-- **+** Grobe Schutzattribute global setzbar: Code als `RX`, `.rodata` als `RO`,
-  Rest `RW`+`XN` (No-Execute) → härtet den Kernel selbst (`W^X`), ohne
-  Prozess-Isolation einzuführen.
-- **−** Bietet **keine** per-Prozess-Hardware-Isolation (genau gewollt) — Trennung
-  zwischen Komponenten kommt allein aus Rust + Capabilities (siehe Vertrauensmodell).
-- **−** Page-Table-Setup einmalig nötig (kleiner, statischer Code in der erlaubten
-  `unsafe`-Domäne „MMU-Init“). Bei 4 GiB kontinuierlichem RAM genügen wenige
-  Block-Einträge (1-GiB-/2-MiB-Blocks), kein mehrstufiger per-Prozess-Walk.
+- **+** The address a process sees **is** the physical address — the
+  specification requirement "real physical address / no translation" remains
+  semantically satisfied (identity map = no *conversion* of significance).
+- **+** Caches/speculation active → **full performance**.
+- **+** No TTBR switch on context switch → **very low switch latency**
+  and **no TLB shootdowns** between processes (good for determinism and
+  multicore scaling).
+- **+** Coarse protection attributes can be set globally: code as `RX`, `.rodata` as `RO`,
+  rest `RW`+`XN` (no-execute) → hardens the kernel itself (`W^X`) without
+  introducing process isolation.
+- **−** Offers **no** per-process hardware isolation (exactly intended) — separation
+  between components comes solely from Rust + capabilities (see trust model).
+- **−** Page-table set-up needed once (small, static code in the permitted
+  `unsafe` domain "MMU init"). With 4 GiB of contiguous RAM a few
+  block entries suffice (1 GiB/2 MiB blocks), no multi-level per-process walk.
 
-### C) MMU an, per-Prozess-VSpaces (klassisch, wie seL4)
-- **+** Echte Hardware-Isolation, kann auch unsichere native Prozesse einsperren.
-- **−** Widerspricht der Spezifikation direkt (per-Prozess-Adressräume, Übersetzung).
-- **−** TTBR-Wechsel + TLB-Verwaltung beim Context-Switch → höhere Latenz,
-  TLB-Shootdowns auf Multicore, mehr Nichtdeterminismus. **Verworfen.**
+### C) MMU on, per-process VSpaces (classic, like seL4)
+- **+** Real hardware isolation, can also lock in unsafe native processes.
+- **−** Directly contradicts the specification (per-process address spaces, translation).
+- **−** TTBR switch + TLB management on context switch → higher latency,
+  TLB shootdowns on multicore, more non-determinism. **Rejected.**
 
-## Entscheidung
+## Decision
 
-**Ansatz B.** Caprock fährt einen **Single-Address-Space (SAS)** mit aktiver
-MMU, aber **einer einzigen, statischen Identity-Map** und aktivierten Caches.
-Es gibt keine per-Prozess-Adressräume und keine Adressübersetzung im
-semantischen Sinn. Speicher-Autorität wird über **Memory-Capabilities**
-vergeben (ADR 0003), Speichersicherheit innerhalb von Komponenten durch **Rust**
-garantiert. In Phase 0 läuft der Kernel noch mit deaktivierter MMU (reiner
-Bring-up); die Identity-Map + Caches werden in Phase 1 aktiviert.
+**Approach B.** Caprock runs a **single address space (SAS)** with an active
+MMU, but **a single, static identity map** and enabled caches.
+There are no per-process address spaces and no address translation in the
+semantic sense. Memory authority is granted via **memory capabilities**
+(ADR 0003), memory safety within components is guaranteed by **Rust**.
+In phase 0 the kernel still runs with the MMU disabled (pure
+bring-up); the identity map + caches are enabled in phase 1.
 
-## Vertrauensmodell (zwingende Konsequenz)
+## Trust model (compelling consequence)
 
-Ohne per-Prozess-Isolation gilt: **alle Komponenten müssen speichersicher sein**
-(sicheres Rust, vertrauenswürdige Toolchain). Ein Prozess mit beliebigem
-`unsafe`/rohen Zeigern könnte ohne MMU fremden Speicher korrumpieren.
-Capabilities begrenzen, *welche* Ressourcen eine Komponente überhaupt ansprechen
-darf (Least Privilege), ersetzen aber **nicht** die Speichersicherheit *innerhalb*
-nicht vertrauenswürdigen nativen Codes. Daher:
+Without per-process isolation: **all components must be memory safe**
+(safe Rust, trusted toolchain). A process with arbitrary
+`unsafe`/raw pointers could corrupt foreign memory without an MMU.
+Capabilities limit *which* resources a component may address at all
+(least privilege), but do **not** replace memory safety *within*
+untrusted native code. Hence:
 
-1. Userland-Komponenten werden als sicheres Rust ausgeliefert.
-2. `unsafe` ist global auf die erlaubten Low-Level-Domänen beschränkt und wird
-   begründet/auditierbar gehalten.
-3. Die grobe globale MMU-Konfiguration (`W^X`, `XN` für Daten, `RO` für `.rodata`)
-   fängt ganze Fehlerklassen ab, ohne Prozess-Isolation einzuführen.
+1. Userland components are delivered as safe Rust.
+2. `unsafe` is restricted globally to the permitted low-level domains and is kept
+   justified/auditable.
+3. The coarse global MMU configuration (`W^X`, `XN` for data, `RO` for `.rodata`)
+   catches whole classes of errors without introducing process isolation.
 
-## Sicherheitsauswirkungen
+## Security implications
 
-- **+** Großer Teil klassischer Speicherfehler wird durch Rust *eliminiert*, nicht
-  nur abgefangen.
-- **+** `W^X`/`XN`/`RO` global härtet die TCB.
-- **−** Kein Schutz gegen bösartigen nativen Code → das Bedrohungsmodell schließt
-  „nicht vertrauenswürdige native Binaries“ aus. Muss prominent dokumentiert und
-  ggf. künftig durch optionale Hardware-Domänen (z. B. MTE, PAN, oder ein
-  optionaler Sandbox-VSpace für untrusted Code) ergänzt werden.
+- **+** A large part of classic memory errors is *eliminated* by Rust, not
+  merely caught.
+- **+** `W^X`/`XN`/`RO` globally hardens the TCB.
+- **−** No protection against malicious native code → the threat model excludes
+  "untrusted native binaries". Must be documented prominently and
+  possibly be complemented in future by optional hardware domains (e.g. MTE, PAN, or an
+  optional sandbox VSpace for untrusted code).
 
-## Performanceauswirkungen
+## Performance implications
 
-- **+** Caches aktiv; kein TTBR-Wechsel/TLB-Shootdown beim Switch → niedrige,
-  vorhersagbare Kontextwechsel-Latenz (gut für *deterministisch* + *Multicore*).
-- **+** IPC kann Daten per Referenz/Move statt per Kopie übergeben (eine
-  Adresse ist global gültig) — sehr niedrige IPC-Latenz möglich (ADR 0004).
-- **−** Einmaliger MMU-Setup-Aufwand und etwas statischer `unsafe`-Code.
+- **+** Caches active; no TTBR switch/TLB shootdown on a switch → low,
+  predictable context-switch latency (good for *deterministic* + *multicore*).
+- **+** IPC can pass data by reference/move instead of by copy (an
+  address is globally valid) — very low IPC latency possible (ADR 0004).
+- **−** One-time MMU set-up effort and some static `unsafe` code.
 
-## Nachtrag: EL0/EL1-Privileg-Trennung im SAS (implementiert)
+## Addendum: EL0/EL1 privilege separation in the SAS (implemented)
 
-Der Single-Address-Space schließt **virtuellen Speicher** und per-Prozess-VSpaces
-aus — er schließt aber **nicht** die ARM-Exception-Level aus. Caprock nutzt die
-*eine* Identity-Map, um eine **Privileg-Grenze** (keine Adressraum-Grenze) per
-AP-Bits zu ziehen:
+The single address space rules out **virtual memory** and per-process VSpaces
+— but it does **not** rule out the ARM exception levels. Caprock uses the
+*one* identity map to draw a **privilege boundary** (not an address-space boundary) via
+AP bits:
 
-- Kernel-Image (`.text`/`.rodata`/`.data`/`.bss`, Kernel-Stacks) → **EL1-only**.
-- User-Code (`.user_text`) → EL0-ausführbar, read-only, `PXN` (an EL1 nicht
-  ausführbar).
-- User-RAM (Heap/User-Stacks oberhalb `__kernel_end`) → EL0+EL1 RW, `PXN`/`UXN`.
+- Kernel image (`.text`/`.rodata`/`.data`/`.bss`, kernel stacks) → **EL1-only**.
+- User code (`.user_text`) → EL0-executable, read-only, `PXN` (not executable
+  at EL1).
+- User RAM (heap/user stacks above `__kernel_end`) → EL0+EL1 RW, `PXN`/`UXN`.
 
-User-Threads laufen auf **EL0** (`SPSR=EL0t`, eigener `SP_EL0`), interagieren mit
-dem Kernel ausschließlich über `svc` (Syscall). Greift EL0-Code auf eine
-EL1-only-Seite zu oder versucht eine privilegierte Instruktion, löst die Hardware
-einen Fault aus; der Kernel **beendet nur den fehlerhaften Thread** und läuft
-weiter (Fault-Hook → `exit_current`), statt anzuhalten. Verifiziert in QEMU:
-ein EL0-Thread, der `0x4008_0000` (Kernel-`.text`) liest, erzeugt einen Data
-Abort (`EC=0x24`) und wird isoliert (`el0`/`el0iso` ALL PASS).
+User threads run at **EL0** (`SPSR=EL0t`, own `SP_EL0`), interact with
+the kernel exclusively via `svc` (syscall). If EL0 code accesses an
+EL1-only page or attempts a privileged instruction, the hardware raises
+a fault; the kernel **terminates only the faulty thread** and keeps running
+(fault hook → `exit_current`) instead of halting. Verified in QEMU:
+an EL0 thread reading `0x4008_0000` (kernel `.text`) produces a data
+abort (`EC=0x24`) and is isolated (`el0`/`el0iso` ALL PASS).
 
-Das mildert den `−`-Punkt oben für **nicht vertrauenswürdigen, aber nativen**
-User-Code: solcher Code kann zwar im SAS andere *User*-Daten erreichen (keine
-Adressraum-Isolation), aber **den Kernel hardware-seitig nicht** mehr berühren.
+This mitigates the `−` point above for **untrusted, but native**
+user code: such code can indeed reach other *user* data in the SAS (no
+address-space isolation), but can **no longer touch the kernel** on the hardware side.
 
-## Nachtrag 2: Hybrid-Modell — optionale per-Prozess-VSpace (implementiert)
+## Addendum 2: hybrid model — optional per-process VSpace (implemented)
 
-Die im Nachtrag 1 verbliebene Lücke (ein kompromittierter nativer Prozess erreicht
-fremde *User*-Daten im SAS) ist nun für **isolierte** PDs geschlossen — **ohne** den
-SAS für vertrauenswürdige PDs aufzugeben (Weg C, Hybrid; siehe
+The gap remaining in addendum 1 (a compromised native process reaches
+foreign *user* data in the SAS) is now closed for **isolated** PDs — **without** giving up the
+SAS for trusted PDs (path C, hybrid; see
 [ext-11](../phase-reports/ext-11-per-process-vspace.md)):
 
-- **Vertrauenswürdige Rust-PDs** → globale SAS-Map (ASID 0), wie gehabt: schnell,
-  deterministisch, Zero-Copy-IPC.
-- **Isolierte PDs** → eigene VSpace (eigene Tabellen + ASID), die nur den Kernel
-  (EL1-only), die geteilte `.user_text` und **eine private 2-MiB-Region** (EL0-RW,
-  `nG`) mappt; alles übrige RAM ist dort EL1-only. Ein Zugriff auf fremden
-  User-Speicher faultet → der Kernel beendet die PD. Adressierung bleibt Identity;
-  Isolation kommt aus der **Präsenz** der Mappings, nicht aus Übersetzung.
+- **Trusted Rust PDs** → global SAS map (ASID 0), as before: fast,
+  deterministic, zero-copy IPC.
+- **Isolated PDs** → own VSpace (own tables + ASID), mapping only the kernel
+  (EL1-only), the shared `.user_text` and **one private 2 MiB region** (EL0-RW,
+  `nG`); all other RAM is EL1-only there. An access to foreign
+  user memory faults → the kernel terminates the PD. Addressing stays identity;
+  isolation comes from the **presence** of the mappings, not from translation.
 
-Verifiziert (`vspace` ALL PASS): SAS-Probe und isolierte Probe lesen dieselbe fremde
-Adresse X — die SAS-Probe darf, die isolierte faultet (`EC=0x24`) und kommuniziert
-ausschließlich per IPC. Damit ist **echte User↔User-Trennung** für untrusted/native
-PDs hardware-erzwingbar; das Kern-Bedrohungsmodell deckt sie nun ab.
+Verified (`vspace` ALL PASS): the SAS probe and the isolated probe read the same foreign
+address X — the SAS probe may, the isolated one faults (`EC=0x24`) and communicates
+exclusively via IPC. This makes **real user↔user separation** for untrusted/native
+PDs enforceable on the hardware side; the core threat model now covers it.
 
-## Offene Punkte für spätere Phasen
+## Open points for later phases
 
-- Genaues Page-Table-Layout der Identity-Map (Blockgrößen, MAIR-Attribute,
-  Cacheability für Device-MMIO-Regionen vs. Normal-RAM).
-- Reclaim der EL1-only Kernel-Stacks für EL0-Threads (aktuell fester Pool von 4
-  Slots, beim Thread-Ende geleakt; der dynamische User-Stack wird zurückgewonnen).
-- Optionaler Hardware-Härtungspfad für nicht vertrauenswürdige Komponenten
-  (MTE/PAN/per-Komponenten-Sandbox-VSpace) — bewusst außerhalb des
-  Kern-Bedrohungsmodells.
+- Exact page-table layout of the identity map (block sizes, MAIR attributes,
+  cacheability for device MMIO regions vs. normal RAM).
+- Reclaim of the EL1-only kernel stacks for EL0 threads (currently a fixed pool of 4
+  slots, leaked at thread end; the dynamic user stack is reclaimed).
+- Optional hardware hardening path for untrusted components
+  (MTE/PAN/per-component sandbox VSpace) — deliberately outside the
+  core threat model.

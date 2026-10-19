@@ -1,140 +1,140 @@
-# Weg zur Betriebsbereitschaft
+# Path to operational readiness
 
-Stand 2026-07-29. Der Plan, wie aus dem heutigen Kernel ein Basissystem für Cloud-Server wird —
-kein Hypervisor darunter, keine VM darin, Isolation und Zeitverwaltung durch den Kern selbst.
+As of 2026-07-29. The plan for how today's kernel becomes a base system for cloud servers —
+no hypervisor beneath it, no VM inside it, isolation and time management by the kernel itself.
 
-Die Punkte selbst stehen in [todo.md](../todo.md); hier steht die **Reihenfolge und warum sie so
-ist**. Was hier nicht steht, ist der Aufwand in Personentagen: die Schätzungen wären geraten, und
-geratene Zahlen werden später als Zusagen gelesen.
+The items themselves are in [todo.md](../todo.md); what is here is the **order and why it is
+so**. What is not here is the effort in person-days: the estimates would be guessed, and
+guessed numbers are later read as promises.
 
-## Der Satz, an dem sich der Plan aufhängt
+## The sentence the plan hangs on
 
-**Der Kernel hat heute keinen Nicht-Test-Zweck.**
+**Today the kernel has no non-test purpose.**
 
-Das ist kein Vorwurf, sondern der gemessene Zustand: Schaltet man das Feature `selftest` ab, baut
-der Kernel, bootet, richtet Paging, LAPIC, Timer, SMP, PCI und VT-d ein — und geht dann in eine
-Leerschleife. `.text` schrumpft dabei von 0x25000 auf 0x11000, mehr als die Hälfte des
-übersetzten Codes ist Prüfinfrastruktur. Es gibt kein Boot-Archiv auf x86, keinen Root-Task, kein
-Userland. Jedes Programm, das heute läuft, ist in den Kernel einkompiliert.
+This is not a reproach but the measured state: if the `selftest` feature is switched off, the
+kernel builds, boots, sets up paging, LAPIC, timer, SMP, PCI and VT-d — and then goes into an
+empty loop. `.text` shrinks from 0x25000 to 0x11000, more than half of the
+compiled code is test infrastructure. There is no boot archive on x86, no root task, no
+userland. Every program that runs today is compiled into the kernel.
 
-Daraus folgt die Gliederung: **Stufe 1 ist nicht Härtung und nicht Skalierung, sondern
-überhaupt-etwas-ausführen-können.** Alles andere hängt daran, und zwar nicht organisatorisch,
-sondern technisch — ein Treiber, ein Netzstack, ein Tenant-Prozess, ein wandernder Thread: alle
-brauchen zuerst einen Weg, Code von außen zu laden und ihm Autorität zu geben.
+From this follows the structure: **stage 1 is not hardening and not scaling, but
+being-able-to-execute-anything-at-all.** Everything else hangs on it, not
+organisationally but technically — a driver, a network stack, a tenant process, a migrating thread: all
+need first a way to load code from outside and give it authority.
 
-## Stufe 0 — den Boden geradeziehen (Vorbedingung von allem)
+## Stage 0 — straightening the ground (precondition of everything)
 
-Nicht verhandelbar, weil jede Messung darauf steht.
+Non-negotiable, because every measurement stands on it.
 
-1. **[D0] Der x86-Lauf muss wieder deterministisch sein.** Gemessen: 4–6 von 8 Läufen desselben
-   Images erreichen `SELFTEST COMPLETE`, die übrigen bleiben an wechselnden Stellen stehen. Ein
-   Aufbau, der in einem Drittel der Fälle hängt, kann keine Aussage tragen — auch nicht die, die
-   er gerade grün meldet. Zwei Verdächtige sind zu trennen: der TCG-Rückfall auf
-   `-cpu Skylake-Client` und die durch den Farbtest verschobene Speicherlage.
-2. **[Verifikation] Die ARM-Suite muss aus einem frischen Clone laufen.** `test-qemu.sh` signiert
-   TrustedSAS-Binaries mit `keys/trusted-test.ed25519`; `/keys/` ist gitignored. Aus einem Clone
-   ist die Suite damit nicht lauffähig, und der zweite Architekturzweig bleibt ungeprüft — genau
-   die Fehlerform, die dieses Projekt schon dreimal bezahlt hat. Lösungsweg: ein **Testschlüssel
-   im Repo** (ausdrücklich als solcher benannt, mit eigenem, im Kernel als `test`
-   gekennzeichnetem Key-Slot), oder ein Skript, das beim ersten Lauf ein Paar erzeugt und
-   `trusted_keys.rs` daraus generiert. Der Produktivschlüssel bleibt selbstverständlich draußen.
-3. **`README.md` sagt, was das Projekt ist.** Sie beschreibt heute einen aarch64-Kernel der Phase
-   7 — kein Wort vom x86-Port, von VT-d, von der Kern-Übergabe. Bei einem Open-Source-Projekt ist
-   das die teuerste veraltete Datei überhaupt.
+1. **[D0] The x86 run must be deterministic again.** Measured: 4–6 of 8 runs of the same
+   image reach `SELFTEST COMPLETE`, the rest stop at varying places. A
+   set-up that hangs in a third of the cases cannot carry a statement — not even the one it
+   is just reporting green. Two suspects are to be separated: the TCG fallback to
+   `-cpu Skylake-Client` and the memory layout shifted by the colour test.
+2. **[Verification] The ARM suite must run from a fresh clone.** `test-qemu.sh` signs
+   TrustedSAS binaries with `keys/trusted-test.ed25519`; `/keys/` is gitignored. From a clone
+   the suite is thus not runnable, and the second architecture branch remains unchecked — exactly
+   the form of failure this project has already paid for three times. Solution: a **test key
+   in the repo** (expressly named as such, with its own key slot marked `test`
+   in the kernel), or a script that generates a pair on the first run and generates
+   `trusted_keys.rs` from it. The production key naturally stays outside.
+3. **`README.md` says what the project is.** Today it describes an aarch64 kernel of phase
+   7 — not a word about the x86 port, VT-d, the core hand-over. In an open-source project that
+   is the most expensive outdated file there is.
 
-## Stufe 1 — der Kernel führt fremden Code aus
+## Stage 1 — the kernel executes foreign code
 
-Das ist die Stufe, die aus einem Testgerüst ein Betriebssystem macht.
+This is the stage that turns a test scaffold into an operating system.
 
-4. **[C6] Boot-Archiv auf x86 über Multiboot-Module.** `SYS_LOAD` scheitert heute sauber, weil es
-   nichts zu laden gibt. Auf ARM existiert der Weg (`tools/mkarchive.py`, `caprock-loader`) —
-   x86 braucht das Gegenstück über die Multiboot-Modulliste.
-5. **[F2] Root-Task.** Der seL4-Weg: ein Startprogramm aus dem Archiv laden und ihm die
-   Wurzel-Caps übergeben. **Erst danach** darf `default = []` werden (todo F2) — vorher wäre das
-   Gating kein schlankerer Kernel, sondern ein leerer.
-6. **[A4] `SYS_CDELETE`, dann `CMOVE`/`CCOPY`.** Ohne das kann ein langlebiger Dienst, der Caps
-   per IPC empfängt, seine Slots nicht freigeben und läuft gegen `CAP_BUDGET_PER_PD`. Ein
-   Root-Task ist genau so ein Dienst — der Punkt wird mit Stufe 1 von einer ABI-Lücke zu einem
-   Betriebsproblem.
+4. **[C6] Boot archive on x86 via Multiboot modules.** `SYS_LOAD` fails cleanly today, because
+   there is nothing to load. On ARM the path exists (`tools/mkarchive.py`, `caprock-loader`) —
+   x86 needs the counterpart via the Multiboot module list.
+5. **[F2] Root task.** The seL4 way: load a start program from the archive and hand it
+   the root caps. **Only then** may `default = []` happen (todo F2) — before that the
+   gating would not be a leaner kernel but an empty one.
+6. **[A4] `SYS_CDELETE`, then `CMOVE`/`CCOPY`.** Without it a long-lived service that receives caps
+   via IPC cannot release its slots and runs against `CAP_BUDGET_PER_PD`. A
+   root task is exactly such a service — with stage 1 the item turns from an ABI gap into an
+   operational problem.
 
-Am Ende von Stufe 1 gilt: ein extern gebautes Programm startet, bekommt Autorität, gibt sie
-zurück. Ab hier ist jede weitere Fähigkeit ein Userland-Programm und kein Kernel-Patch.
+At the end of stage 1 the following holds: an externally built program starts, receives authority, gives it
+back. From here on every further capability is a userland program and not a kernel patch.
 
-## Stufe 2 — ein Server, der etwas tut
+## Stage 2 — a server that does something
 
-7. **[Z10] Treiberrahmen + virtio auf x86.** `virtio` ist bis heute aarch64-only. Ohne Netz und
-   Blockgerät ist es keine Cloud. Als Userland-PDs, nicht im Kernel — das ist die Projektgrenze
-   aus der `README.md`, und sie ist richtig.
-8. **[E, Schritt 3b+4] Queued Invalidation, dann Interrupt Remapping mit abgeschaltetem CFI.**
-   Reihenfolge ist erzwungen: die Invalidierung des Interrupt-Entry-Cache existiert **nur** als
-   QI-Deskriptor. Und ohne IR kann ein durchgereichtes Gerät beliebige Interrupt-Nachrichten
-   erzeugen — das ist der Standardausbruch aus einer Geräte-Zuteilung und muss **vor** dem ersten
-   Tenant-Gerät stehen, nicht danach.
-9. ~~**[Z9] Fehlerdomäne festlegen und aufschreiben.**~~ **Erledigt 2026-08-02 (B-6.2):**
-   [fehlerdomaene.md](fehlerdomaene.md), Invariante §14 in [invariants.md](invariants.md).
-   Festgelegt ist die billige Variante — *der Knoten ist die Fehlerdomäne, Redundanz über Knoten*,
-   und alle TrustedSAS-PDs eines Knotens bilden untereinander **eine** Domäne.
-   **Die Prämisse dieses Punktes war falsch:** ein Kernel-Panic reißt den Knoten heute *nicht*
-   zuverlässig mit — er wird in den häufigsten Fällen verschluckt, weil das `halt()` im Panic-Pfad
-   die Interrupts nicht maskiert und der Timer-Tick den Kern zurückholt. Gemessen, mit vier
-   verschiedenen Ausgängen für dieselbe Ursache. Für ein Sicherheitsprodukt ist das der schlechtere
-   Ausgang: der Kernel arbeitet nach einer nachweislich verletzten Invariante weiter. Die drei
-   billigen Gegenmaßnahmen sind benannt und **nicht** gebaut — sie sind eine Entscheidung
-   (Verfügbarkeit gegen Ehrlichkeit), keine Reparatur.
+7. **[Z10] Driver framework + virtio on x86.** `virtio` is aarch64-only to this day. Without network and
+   block device it is not a cloud. As userland PDs, not in the kernel — that is the project boundary
+   from the `README.md`, and it is right.
+8. **[E, step 3b+4] Queued invalidation, then interrupt remapping with CFI switched off.**
+   The order is enforced: the invalidation of the interrupt entry cache exists **only** as a
+   QI descriptor. And without IR a passed-through device can generate arbitrary interrupt messages
+   — that is the standard breakout from a device assignment and must stand **before** the first
+   tenant device, not after.
+9. ~~**[Z9] Define and write down the fault domain.**~~ **Done 2026-08-02 (B-6.2):**
+   [fehlerdomaene.md](fehlerdomaene.md), invariant §14 in [invariants.md](invariants.md).
+   What is fixed is the cheap variant — *the node is the fault domain, redundancy across nodes*,
+   and all TrustedSAS PDs of a node together form **one** domain.
+   **The premise of this item was wrong:** a kernel panic does *not* reliably take the node down
+   today — in the most frequent cases it is swallowed, because the `halt()` in the panic path
+   does not mask the interrupts and the timer tick brings the core back. Measured, with four
+   different outcomes for the same cause. For a security product that is the worse
+   outcome: the kernel keeps working after a demonstrably violated invariant. The three
+   cheap countermeasures are named and **not** built — they are a decision
+   (availability against honesty), not a repair.
 
-## Stufe 3 — mehr als ein Tenant, verantwortbar
+## Stage 3 — more than one tenant, justifiably
 
-10. **[Z1] Der isolierte, gefärbte Pfad wird der Normalfall.** Heute ist `spawn_isolated` regulär
-    und ungefärbt, `spawn_isolated_colored` die Ausnahme. Dazu gehört die Entscheidung über die
-    Regionsgröße: Färbung verträgt sich nicht mit dem 2-MiB-Blockdeskriptor (512 Seiten
-    überstreichen alle 256 gemessenen Farben), also entweder kleinere Regionen mit seitenweisem
-    Mapping oder mehrere gefärbte Läufe je PD.
-11. **[A1-Rest] Streifen-Freiliste.** `mask_for` vergibt heute rundläufig, **ohne** zu prüfen, ob
-    ein Streifen belegt ist: mehr gleichzeitige PDs als Partitionen heißt stille
-    Farbüberschneidung. Nötig ist ein sauberer Fehlschlag statt einer stillen Aufweichung.
-12. **[Z6] SMT.** Cache-Coloring trennt den LLC und **prinzipiell nicht** L1/L2/TLB/Store-Buffer
-    zwischen Geschwister-Hyperthreads. Entweder SMT aus (kostet Durchsatz, ist ehrlich) oder ein
-    physischer Kern gehört zu jedem Zeitpunkt genau einem Tenant. Für den zweiten Weg muss der
-    Scheduler die CPU-Topologie kennen; die liest heute niemand.
-13. **[A3/C3] Cap-/PD-/Endpoint-Tabellen dynamisch**, davor `ReplyFinal` vom Kernelstack lösen.
-    Solange die Cap-Tabelle global und fest ist, bestimmt ein Tenant die Dichte aller anderen.
-14. **[Z7] Messbarer Boot und Attestierung.** Vorbedingung für alles, was Tenant-Zustand über das
-    Netz bewegt.
+10. **[Z1] The isolated, coloured path becomes the normal case.** Today `spawn_isolated` is regular
+    and uncoloured, `spawn_isolated_colored` the exception. This includes the decision on
+    the region size: colouring is incompatible with the 2 MiB block descriptor (512 pages
+    sweep over all 256 measured colours), so either smaller regions with page-wise
+    mapping or several coloured runs per PD.
+11. **[A1 remainder] Stripe free list.** `mask_for` today allocates round-robin, **without** checking whether
+    a stripe is occupied: more simultaneous PDs than partitions means silent
+    colour overlap. What is needed is a clean failure instead of a silent weakening.
+12. **[Z6] SMT.** Cache colouring separates the LLC and **in principle not** L1/L2/TLB/store buffer
+    between sibling hyperthreads. Either SMT off (costs throughput, is honest) or one
+    physical core belongs at every point in time to exactly one tenant. For the second way the
+    scheduler must know the CPU topology; nobody reads it today.
+13. **[A3/C3] Cap/PD/endpoint tables dynamic**, beforehand detach `ReplyFinal` from the kernel stack.
+    As long as the cap table is global and fixed, one tenant determines the density of all the others.
+14. **[Z7] Measured boot and attestation.** Precondition for everything that moves tenant state over the
+    network.
 
-## Stufe 4 — die Eigenschaften, die VMs ersetzen
+## Stage 4 — the properties that replace VMs
 
-15. **[Z2] Abrechnung entkoppelt vom Zeittakt.** Verbrauch per Zyklenstempel beim Ein- und
-    Auswechseln (per-TCB `consumed_cycles`, todo D), Monitoring-Cap darüber. **Ein schnellerer
-    Tick ist die falsche Antwort** — er erhöht Auflösung *und* Overhead; ein Zyklenstempel erhöht
-    nur die Auflösung.
-16. **[Z5] Tickless für Rechenkerne.** Timer nur armieren, wenn es etwas zu verdrängen gibt.
-    Zusammen mit 15 ergibt das: Abrechnung per Zyklen, Verdrängung per Bedarf — die beiden werden
-    entkoppelt, und genau das ist der Punkt.
-17. **[Z8] NUMA**, gemeinsam mit der Farbvergabe entschieden. Zwei getrennt entwickelte Politiken
-    kämpfen sonst um dieselbe Physadresse, und wer zuerst zuteilt, gewinnt.
-18. **[Z4] Checkpoint/Restore eines Threads**, in der Reihenfolge Z4a–Z4f. Das ist der
-    aufwendigste Punkt des Plans, und er steht bewusst am Ende: er setzt Stufe 1 (Prozesse
-    überhaupt), Stufe 3 (Isolation, die man mitnehmen kann) und Z7 (eine Zielmaschine, der man
-    trauen kann) voraus.
-19. **[C5] GICv3 auf ARM**, falls ARM Zielplattform bleibt — sonst bleibt ARM bei 8 Kernen. Auf
-    x86 ist das mit x2APIC erledigt.
+15. **[Z2] Accounting decoupled from the clock tick.** Consumption by cycle stamp on switching in and
+    out (per-TCB `consumed_cycles`, todo D), monitoring cap on top. **A faster
+    tick is the wrong answer** — it raises resolution *and* overhead; a cycle stamp raises
+    only the resolution.
+16. **[Z5] Tickless for compute cores.** Arm the timer only if there is something to preempt.
+    Together with 15 this yields: accounting by cycles, preemption by need — the two are
+    decoupled, and that is exactly the point.
+17. **[Z8] NUMA**, decided together with the colour allocation. Two separately developed policies
+    otherwise fight over the same physical address, and whoever allocates first wins.
+18. **[Z4] Checkpoint/restore of a thread**, in the order Z4a–Z4f. This is the
+    most costly item of the plan, and it deliberately stands at the end: it presupposes stage 1 (processes
+    at all), stage 3 (isolation that one can take along) and Z7 (a target machine that can
+    be trusted).
+19. **[C5] GICv3 on ARM**, if ARM remains a target platform — otherwise ARM stays at 8 cores. On
+    x86 this is done with x2APIC.
 
-## Was ich an diesem Plan für riskant halte
+## What I consider risky about this plan
 
-**Z4 (Thread-Migration) kann Entwurfsentscheidungen erzwingen, die weiter vorn liegen.** Caps sind
-heute Indizes in eine globale Tabelle plus CDT-Kante; über Maschinengrenzen bedeutet ein Index
-nichts. Wenn sich beim Entwurf von Z4b herausstellt, dass eine externe, maschinenunabhängige
-Cap-Darstellung nötig ist, betrifft das die Cap-Crate, die ABI und die Verifikation. Es lohnt
-sich, **früh einen Wegwerf-Prototyp** von Z4b zu bauen — nur die Serialisierung eines
-Cap-Space, ohne Netz, ohne Migration — um herauszufinden, ob das Modell trägt. Das kostet wenig
-und kann teure Umwege ersparen.
+**Z4 (thread migration) can force design decisions that lie further forward.** Caps are
+today indices into a global table plus a CDT edge; across machine boundaries an index
+means nothing. If during the design of Z4b it turns out that an external, machine-independent
+cap representation is needed, this affects the cap crate, the ABI and the verification. It is worth
+**building an early throwaway prototype** of Z4b — only the serialisation of a
+cap space, without network, without migration — to find out whether the model holds. That costs little
+and can spare expensive detours.
 
-**Der zweite Architekturzweig verrottet, solange er nicht läuft.** Solange die ARM-Suite aus einem
-Clone nicht startet, ist jede aarch64-Zeile ungeprüft — die `hal::cache`-Fassung für ARM ist
-geschrieben, übersetzt und nie ausgeführt worden. Deshalb steht Punkt 2 in Stufe 0 und nicht
-irgendwo hinten.
+**The second architecture branch rots as long as it does not run.** As long as the ARM suite does not start
+from a clone, every aarch64 line is unchecked — the `hal::cache` version for ARM is
+written, compiled and never executed. That is why item 2 stands in stage 0 and not
+somewhere at the back.
 
-**Die Reihenfolge Härtung-vor-Funktion ist verlockend und wäre falsch.** A1, SMT, NUMA sind
-sichtbare, gut abgrenzbare Arbeit mit schönen Testergebnissen. Aber ein Kernel, der nichts
-ausführt, braucht keine Cache-Partitionierung zwischen Tenants, die es nicht gibt. Erst Stufe 1,
-dann der Rest.
+**The order hardening-before-function is tempting and would be wrong.** A1, SMT, NUMA are
+visible, well-delimited work with nice test results. But a kernel that executes nothing
+needs no cache partitioning between tenants that do not exist. First stage 1,
+then the rest.

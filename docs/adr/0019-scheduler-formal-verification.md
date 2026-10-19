@@ -1,49 +1,49 @@
-# ADR 0019 — Formale funktionale Verifikation des Schedulers (Verus, Phase 5)
+# ADR 0019 — Formal functional verification of the scheduler (Verus, phase 5)
 
-Status: **angenommen** · Datum: 2026-06-27 · Phase 5 (letzte) der funktionalen Verifikation.
-Bezug: ADR 0015 (Verifikationsansatz), ADR 0005 (per-Kern-paralleler MCS-Scheduler),
-`Verification/scheduler/`, Laufzeit-`Scheduler::audit`.
+Status: **accepted** · Date: 2026-06-27 · Phase 5 (last) of functional verification.
+Reference: ADR 0015 (verification approach), ADR 0005 (per-core parallel MCS scheduler),
+`Verification/scheduler/`, run-time `Scheduler::audit`.
 
-## Kontext
+## Context
 
-Der Scheduler (`caprock-sched`) entscheidet, **welcher** Thread laeuft. Eine inkonsistente
-Ready-Queue (toter/blockierter Eintrag, Duplikat, verlorener lauffaehiger Thread) bricht die
-Verfuegbarkeit; eine fehlerhafte MCS-Budget-Buchhaltung erlaubt Laufzeit-Diebstahl (ein Thread laeuft
-ueber sein Budget hinaus) oder Aushungerung (ein Thread wird nie wieder eingeplant). Zur Laufzeit
-prueft `Scheduler::audit` (Codes 1–7) + der hwfuzz; Phase 5 **beweist** die Kern-Invarianten des
-sequentiellen Einkern-Modells. **Nebenlaeufigkeit** (die acht per-Kern-Instanzen hinter je eigenem
-Lock, Reschedule-IPIs, Kontextwechsel) bleibt **ausserhalb** (Concurrency-/HAL-TCB, vgl. ADR 0015).
+The scheduler (`caprock-sched`) decides **which** thread runs. An inconsistent
+ready queue (dead/blocked entry, duplicate, lost runnable thread) breaks
+availability; a faulty MCS budget accounting permits run-time theft (a thread runs
+beyond its budget) or starvation (a thread is never scheduled again). At run time
+`Scheduler::audit` (codes 1–7) + the hwfuzz check; phase 5 **proves** the core invariants of the
+sequential single-core model. **Concurrency** (the eight per-core instances, each behind its own
+lock, reschedule IPIs, context switches) stays **outside** (concurrency/HAL TCB, cf. ADR 0015).
 
-## Variantenvergleich
+## Comparison of variants
 
-| Variante | Beschreibung | Bewertung |
+| Variant | Description | Assessment |
 |---|---|---|
-| V1 nebenlaeufiges Mehrkern-Modell | acht Instanzen + IPIs + Migration im Interleaving | Verus ist single-threaded; braucht Loom/TLA+ -> ausserhalb (ADR 0015). Der Code haelt jede Instanz hinter eigenem Lock -> Einkern-Sicht ist die faithful sequentielle Abstraktion |
-| V2 konkrete Ringpuffer-Queues | `RunQueue` (buf/head/tail/count) bitgenau nachbauen | beweist die Ringpuffer-Implementierung, nicht die *scheduling-Eigenschaft*; viel Ballast, geringer Sicherheitsgewinn (Ringpuffer ist klein + fuzzer-/Kani-naher Kandidat) |
-| **V3 Mitgliedschafts-Abstraktion (gewählt)** | Ready-Queue als per-Thread-Flag `in_ready`; Invariante koppelt es an den Thread-Zustand | erfasst **genau** die `audit`-Eigenschaft (Codes 1/2/3/4/7) + die MCS-Budget-Invarianten; Duplikatfreiheit (Code 3) ist durch das Flag strukturell; klein + faithful zur serialisierten Realitaet |
+| V1 concurrent multi-core model | eight instances + IPIs + migration in interleaving | Verus is single-threaded; needs Loom/TLA+ -> outside (ADR 0015). The code keeps every instance behind its own lock -> the single-core view is the faithful sequential abstraction |
+| V2 concrete ring-buffer queues | rebuild `RunQueue` (buf/head/tail/count) bit-exactly | proves the ring-buffer implementation, not the *scheduling property*; much ballast, little security gain (the ring buffer is small + a candidate closer to fuzzer/Kani) |
+| **V3 membership abstraction (chosen)** | ready queue as a per-thread flag `in_ready`; the invariant couples it to the thread state | captures **exactly** the `audit` property (codes 1/2/3/4/7) + the MCS budget invariants; duplicate freedom (code 3) is structural through the flag; small + faithful to the serialised reality |
 
-## Entscheidung
+## Decision
 
-**V3** — das sequentielle Einkern-Modell mit **Mitgliedschafts-Kopplung** modellieren und beweisen:
+**V3** — model and prove the sequential single-core model with **membership coupling**:
 
-1. **Runqueue-Kopplung** (`coupled`, Herz von `audit`): ein Thread steht **genau dann** in einer
-   Ready-Queue, wenn er **lauffaehig** (belegt ∧ nicht blockiert ∧ nicht erschoepft) und **nicht der
-   laufende** ist. Deckt audit-Codes 1 (kein toter Eintrag), 2 (kein blockierter), 4 (current nicht
-   bereit), 7 (kein verlorener) ab; Code 3 (kein Duplikat) ist strukturell (Flag statt Multimenge).
-2. **MCS-Budget-Kopplung** (`budget_inv`): Restbudget ≤ Budget; erschoepft ⟹ Rest 0; **budget==0 ⟹
-   nie erschoepft** (Round-Robin hungert nie aus).
-3. Alle Operationen (`block_current`, `pick`, `unblock`, `pause`, `tick_charge`, `refill`,
-   `set_budget`) **erhalten** beide Invarianten; `refill` stellt das Budget wieder her, `set_budget`
-   rettet einen erschoepften Thread vor dem Verlust, `tick_charge` deplaniert bei Erschoepfung sauber.
+1. **Runqueue coupling** (`coupled`, heart of `audit`): a thread is in a
+   ready queue **if and only if** it is **runnable** (allocated ∧ not blocked ∧ not exhausted) and **not the
+   running one**. Covers audit codes 1 (no dead entry), 2 (no blocked one), 4 (current not
+   ready), 7 (no lost one); code 3 (no duplicate) is structural (flag instead of multiset).
+2. **MCS budget coupling** (`budget_inv`): remaining budget ≤ budget; exhausted ⟹ remainder 0; **budget==0 ⟹
+   never exhausted** (round robin never starves).
+3. All operations (`block_current`, `pick`, `unblock`, `pause`, `tick_charge`, `refill`,
+   `set_budget`) **preserve** both invariants; `refill` restores the budget, `set_budget`
+   rescues an exhausted thread from loss, `tick_charge` deschedules cleanly on exhaustion.
 
-Abstraktes Modell (V2 i. S. v. ADR 0015 — faithful, realer Code unveraendert).
+Abstract model (V2 in the sense of ADR 0015 — faithful, real code unchanged).
 
-## Konsequenzen
+## Consequences
 
-- **Positiv:** die Scheduler-Kern-Eigenschaften (Ready-Queue-Konsistenz, kein verlorener Thread,
-  MCS-Schranke, keine Aushungerung, Fortschritt via stets-bereitem Idle) sind bewiesen und ergaenzen
-  `Scheduler::audit` + den hwfuzz. **Phase 5 schliesst die funktionale Kern-Verifikation ab.**
-- **Grenzen/offen:** **Prioritaets-Queue-Trennung** (audit-Code 6 — Thread in der Queue seiner
-  Prioritaet) ist strukturell und hier nicht modelliert; **Budget-Donation** (intra-core IPC,
-  geteilter Scheduling-Context), **Zombie-/Reap-Lebenszyklus** und **Nebenlaeufigkeit** (Mehrkern,
-  IPIs, Migration, Kontextwechsel) bleiben ausdruecklich ausserhalb (Folgestufen bzw. HW-TCB).
+- **Positive:** the scheduler core properties (ready queue consistency, no lost thread,
+  MCS bound, no starvation, progress via an always-ready idle) are proved and complement
+  `Scheduler::audit` + the hwfuzz. **Phase 5 completes the functional core verification.**
+- **Limits/open:** **priority queue separation** (audit code 6 — thread in the queue of its
+  priority) is structural and not modelled here; **budget donation** (intra-core IPC,
+  shared scheduling context), the **zombie/reap lifecycle** and **concurrency** (multi-core,
+  IPIs, migration, context switch) remain expressly outside (follow-up stages or HW TCB).

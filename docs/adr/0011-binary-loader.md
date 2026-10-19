@@ -1,160 +1,160 @@
-# ADR 0011 — Generischer Binary-Loader (extern gebaute Prozesse, In-Kernel, cap-gegatet)
+# ADR 0011 — Generic binary loader (externally built processes, in-kernel, cap-gated)
 
-Status: **Vorgeschlagen** (ext-26; Architektur + Format vom Nutzer entschieden, Implementierung folgt nach Plan-Freigabe)
+Status: **Proposed** (ext-26; architecture + format decided by the user, implementation follows after plan approval)
 
-## Kontext
+## Context
 
-Bis ext-25 ist *jeder* Prozess-/PD-Code **in das Kernel-Image kompiliert** (`.user_text`-Sektion)
-und wird über **In-Kernel-Funktionszeiger** gespawnt (`spawn` = EL1/TrustedSAS, `spawn_user`/
-`spawn_isolated*` = EL0/isoliert). Es gibt **keinen** Mechanismus, extern gebauten Code zu laden:
-kein Syscall, kein QEMU-`-device loader`-Einlesen, keine Modul-Tabelle, kein Loader.
+Until ext-25, *every* process/PD code is **compiled into the kernel image** (`.user_text` section)
+and spawned via **in-kernel function pointers** (`spawn` = EL1/TrustedSAS, `spawn_user`/
+`spawn_isolated*` = EL0/isolated). There is **no** mechanism to load externally built code:
+no syscall, no QEMU `-device loader` reading, no module table, no loader.
 
-Ziel von ext-26: der Übergang von **eingebetteten Prozessen** zu einem **echten Microkernel**, in
-dem TrustedSAS-, HardwareLand- und UserLand-Prozesse **extern gebaut, geladen und gestartet** werden.
-Der Kernel stellt dafür einen **generischen Binary-Loader** bereit; die bestehende
-Sicherheitsarchitektur (Capabilities, Region-Runtime, DMA, Hot-Reload, Domänen, Audits) bleibt
-**vollständig erhalten** und wird in den Loader integriert.
+Goal of ext-26: the transition from **embedded processes** to a **real microkernel**, in
+which TrustedSAS, HardwareLand and UserLand processes are **built externally, loaded and started**.
+For this the kernel provides a **generic binary loader**; the existing
+security architecture (capabilities, region runtime, DMA, hot reload, domains, audits) remains
+**fully preserved** and is integrated into the loader.
 
-## Entscheidung
+## Decision
 
-### 1. Placement: **In-Kernel-Loader, cap-gegatet** (Architektur A)
-Der Loader ist Kernel-Code (kleiner, auditierbarer Mechanismus). Das *Laden* ist **kein
-Ambient-Recht**: es erfordert eine **`Loader`-Capability** (neuer `ObjectKind::Loader`), die über
-einen neuen Syscall `SYS_LOAD` vorgelegt wird. Der Loader vergibt sich **nichts** selbst; der
-geladene Prozess erhält ausschließlich Caps, die der **Aufrufer** (Loader-Cap-Inhaber) bereits
-besitzt und im Manifest zur Delegation benennt — installiert über das **bestehende**
-`install_cap_checked` (Domänen-Policy + Audits gelten unverändert).
+### 1. Placement: **in-kernel loader, cap-gated** (architecture A)
+The loader is kernel code (small, auditable mechanism). *Loading* is **not an
+ambient right**: it requires a **`Loader` capability** (new `ObjectKind::Loader`), presented via
+a new syscall `SYS_LOAD`. The loader grants **nothing** to itself; the
+loaded process receives exclusively caps that the **caller** (loader cap holder) already
+holds and names in the manifest for delegation — installed via the **existing**
+`install_cap_checked` (domain policy + audits apply unchanged).
 
-*Vergleich (s. u.):* A statt B (Userspace-Loader-Server), weil B viele neue, extrem mächtige
-Syscalls (Fremd-PD-Fabrik + Fremd-Cap-Install) erfordert — was die Angriffsfläche **vergrößert**,
-die wir minimieren wollen — und einen In-Kernel-Bootstrap-Loader ohnehin braucht. Der einzige
-TCB-Zuwachs von A ist der ELF-Parser; er wird minimal gehalten (Safe-Rust, bounds-geprüft, eigener
-Fuzzer).
+*Comparison (see below):* A instead of B (userspace loader server), because B requires many new, extremely
+powerful syscalls (foreign-PD factory + foreign-cap install) — which **enlarges** the attack surface
+we want to minimise — and needs an in-kernel bootstrap loader anyway. The only
+TCB growth of A is the ELF parser; it is kept minimal (safe Rust, bounds-checked, own
+fuzzer).
 
-### 2. Format: **Minimal-ELF64, nur `PT_LOAD`, keine Relokationen**
-Statisch gelinkte Rust-Binaries als `ET_EXEC` mit **fixer Lade-VA**. Der Loader implementiert NUR:
-ELF64-Header validieren (Magic, Class=64, Data=LE, Machine=`EM_AARCH64`=0xB7, Type=`ET_EXEC`),
-Program-Header-Tabelle lesen, **`PT_LOAD`-Segmente** (p_offset/p_filesz/p_memsz/p_vaddr/p_flags)
-kopieren, `.bss` (memsz>filesz) nullen, Entry-Point anspringen. **Kein** Dynamic-Linking, **keine**
-Relokationen, **kein** Symbol-/Section-Parsing. W^X aus `p_flags`: `X`→RX, `W`→RW, sonst RO.
+### 2. Format: **minimal ELF64, only `PT_LOAD`, no relocations**
+Statically linked Rust binaries as `ET_EXEC` with a **fixed load VA**. The loader implements ONLY:
+validate the ELF64 header (magic, class=64, data=LE, machine=`EM_AARCH64`=0xB7, type=`ET_EXEC`),
+read the program header table, copy **`PT_LOAD` segments** (p_offset/p_filesz/p_memsz/p_vaddr/p_flags),
+zero `.bss` (memsz>filesz), jump to the entry point. **No** dynamic linking, **no**
+relocations, **no** symbol/section parsing. W^X from `p_flags`: `X`→RX, `W`→RW, otherwise RO.
 
-### 3. Boot-Delivery: **Boot-Archiv in reserviertem RAM-Fenster**
-QEMU `-device loader,file=boot-archive.bin,addr=MOD_BASE` legt EIN Archiv in ein **oben in RAM
-reserviertes Fenster** (`MOD_BASE = ram_end - MOD_WINDOW`). `init_mem` gibt dem `PhysAllocator`
-nur `[free_base, MOD_BASE)` — das Fenster ist also **nie** allokierbar (kein Konflikt). Archiv:
+### 3. Boot delivery: **boot archive in a reserved RAM window**
+QEMU `-device loader,file=boot-archive.bin,addr=MOD_BASE` places ONE archive in a **window reserved
+at the top of RAM** (`MOD_BASE = ram_end - MOD_WINDOW`). `init_mem` gives the `PhysAllocator`
+only `[free_base, MOD_BASE)` — the window is thus **never** allocatable (no conflict). Archive:
 `Header{ magic, version, count, reserved }` + `count ×` `Entry{ name[16], blob_off, blob_len,
-domain, manifest_off, manifest_len, flags, hash[32] }` + Blobs + Manifeste. Ein Build-Skript
-(`tools/mkarchive`, **kein** Kernelcode) assembliert das Archiv aus den extern gebauten Binaries.
-Der Kernel liest das Archiv (Safe-Rust, bounds-geprüft) und lädt Einträge.
+domain, manifest_off, manifest_len, flags, hash[32] }` + blobs + manifests. A build script
+(`tools/mkarchive`, **no** kernel code) assembles the archive from the externally built binaries.
+The kernel reads the archive (safe Rust, bounds-checked) and loads entries.
 
-### 4. Domänen: ALLE geladenen Prozesse laufen EL0-isoliert (Korrektur, „TrustedSAS auch in EL0")
-- **Geladene Prozesse sind IMMER EL0-isoliert.** `load_into_pd` spawnt stets einen EL0-Thread in
-  einer eigenen VSpace (Segmente an `p_vaddr` gemappt, W^X). Ein bösartiges/fehlerhaftes Binary ist
-  daher **hardware-isoliert** (Fault tötet nur den Prozess) — **unabhängig von der Domäne**.
-- Die **Domäne** legt nur die **Cap-Autorität** fest, NICHT den Privilegienlevel:
-  - **UserLand:** keine Hardware-/Management-Rechte.
-  - **HardwareLand:** Hardware-Caps + genau ein Trusted-Partner (vor-erstellte Backend-PD mit
-    Kanal; via `load_program_into_pd`).
-  - **TrustedSAS:** darf `PdControl`/`Loader`-Caps halten (Trust-Stufe), läuft aber **geladen
-    EL0-isoliert** — NICHT EL1. `domain_audit` erlaubt isolierte TrustedSAS-PDs bereits.
-- **Konsequenz:** es gibt **kein** privileg-basiertes Lade-Verbot. Der frühere Vorbehalt („extern
-  geladener EL1-Code unterläuft SIP") entfällt, weil **kein** geladener Prozess EL1 läuft. Damit
-  sind **alle drei Domänen** sicher extern ladbar (Voraussetzung für die ext-27-Testdienste). Die
-  bestehenden **EL1-globalen** TrustedSAS-PDs (in-kernel, SAS, zero-copy) bleiben unverändert; das
-  ist eine separate, in-kernel-Konfiguration. `verify_image`/`prog.hash` bleiben als
-  **Integritäts-/Signatur-Hook** (für künftige vertrauenswürdige Produktionsdienste), gaten aber
-  nicht mehr nach Domäne.
+### 4. Domains: ALL loaded processes run EL0-isolated (correction, "TrustedSAS also in EL0")
+- **Loaded processes are ALWAYS EL0-isolated.** `load_into_pd` always spawns an EL0 thread in
+  its own VSpace (segments mapped at `p_vaddr`, W^X). A malicious/faulty binary is
+  therefore **hardware-isolated** (a fault kills only the process) — **independent of the domain**.
+- The **domain** fixes only the **cap authority**, NOT the privilege level:
+  - **UserLand:** no hardware/management rights.
+  - **HardwareLand:** hardware caps + exactly one trusted partner (pre-created backend PD with
+    channel; via `load_program_into_pd`).
+  - **TrustedSAS:** may hold `PdControl`/`Loader` caps (trust level), but runs **loaded
+    EL0-isolated** — NOT EL1. `domain_audit` already allows isolated TrustedSAS PDs.
+- **Consequence:** there is **no** privilege-based loading prohibition. The earlier reservation ("externally
+  loaded EL1 code undermines SIP") lapses, because **no** loaded process runs at EL1. Thus
+  **all three domains** can safely be loaded externally (precondition for the ext-27 test services). The
+  existing **EL1-global** TrustedSAS PDs (in-kernel, SAS, zero-copy) remain unchanged; that
+  is a separate, in-kernel configuration. `verify_image`/`prog.hash` remain as an
+  **integrity/signature hook** (for future trusted production services), but no longer gate
+  by domain.
 
-### 5. Capability-Initialisierung über Manifest
-Jedes Programm trägt ein **Manifest** (im Archiv): `domain`, `entry_extra` (Startparameter),
-**Cap-Endowment-Liste** = Verweise auf **Caps des Aufrufers**, die in die neue PD delegiert werden
-(Slot → Recht). Der Loader: `create_pd_in_domain(domain)` → für jeden Eintrag `copy/mint` aus der
-Aufrufer-Cap (nie mehr Rechte als der Aufrufer) → `install_cap_checked(new_pd, slot, cap)`
-(Domänen-Policy greift) → Entry-Thread spawnen, **Startparameter in `x0`** (Zeiger auf eine
-Boot-Info-Struktur in einer dem Prozess gehörenden Region). **Keine Eskalation, keine
-Domänen-Umgehung** — strukturell durch `install_cap_checked` garantiert.
+### 5. Capability initialisation via manifest
+Every program carries a **manifest** (in the archive): `domain`, `entry_extra` (start parameters),
+**cap endowment list** = references to **caps of the caller** that are delegated into the new PD
+(slot → right). The loader: `create_pd_in_domain(domain)` → for every entry `copy/mint` from the
+caller cap (never more rights than the caller) → `install_cap_checked(new_pd, slot, cap)`
+(domain policy applies) → spawn the entry thread, **start parameter in `x0`** (pointer to a
+boot info structure in a region owned by the process). **No escalation, no
+domain bypass** — structurally guaranteed by `install_cap_checked`.
 
-### 6. Lebenszyklus: Start / Ende / Hot-Reload / mehrere Prozesse
-`SYS_LOAD` gibt eine **`PdControl`-Cap** auf die neue PD zurück (sofern der Aufrufer TrustedSAS ist)
-→ Start/Stop/Pause/Resume über das **bestehende** `SYS_PDCTL`. **Hot-Reload:** ein Programm aus
-einer neueren Archiv-Version neu laden = neue PD-Instanz laden + `reload_swap` (bestehender ext-7-
-Mechanismus, gleicher Endpoint). Mehrere Prozesse: der Loader ist reentrant (pro Aufruf eine PD;
-Region-Runtime + VSpace-Allokator tragen die Mehrfachnutzung).
+### 6. Lifecycle: start / end / hot reload / several processes
+`SYS_LOAD` returns a **`PdControl` cap** to the new PD (if the caller is TrustedSAS)
+→ start/stop/pause/resume via the **existing** `SYS_PDCTL`. **Hot reload:** reloading a program from
+a newer archive version = load a new PD instance + `reload_swap` (existing ext-7
+mechanism, same endpoint). Several processes: the loader is reentrant (one PD per call;
+region runtime + VSpace allocator support the multiple use).
 
-### 7. Signatur + Versionierung: **vorbereitet**, nicht erzwungen
-Archiv-/Manifest-Header tragen `version` und ein `hash[32]`-Feld (reserviert). Die Verifikation ist
-ein klar markierter Hook (`verify_image(entry) -> bool`, vorerst `true` außer für EL1 = Pflicht
-sobald implementiert). So lässt sich Signaturprüfung + Versionsverwaltung später **ohne
-Format-/API-Bruch** nachrüsten.
+### 7. Signature + versioning: **prepared**, not enforced
+Archive/manifest headers carry `version` and a `hash[32]` field (reserved). Verification is
+a clearly marked hook (`verify_image(entry) -> bool`, for now `true` except for EL1 = mandatory
+once implemented). Thus signature checking + version management can be retrofitted later **without
+a format/API break**.
 
-## Verfeinerungen (Nutzer-Review, vor L1 eingebaut)
+## Refinements (user review, incorporated before L1)
 
-1. **Loader als eigener Kernel-Dienst, kleine öffentliche API.** Der Loader lebt im Kernel, ist aber
-   ein eigenes Modul (`kernel/src/loader.rs` + Crate `caprock-loader`) mit **minimaler** öffentlicher
-   API: im Kern eine einzige Operation `loader::load_image(&Program, …) -> Result<Pd, LoaderError>`.
-   So bleibt er formal analysierbar + später austauschbar.
-2. **ELF vollständig in Safe Rust parsen.** Alle Header-/Offset-/Größenprüfungen liegen im Crate
-   `caprock-loader` (`#![forbid(unsafe_code)]`). `unsafe` entsteht **erst** beim Kopieren bereits
-   **validierter** Segmente in den Zielspeicher (Kernel-Glue) — nie im Parser.
-3. **Quelle austauschbar — API NICHT archiv-abhängig.** Das Boot-Archiv ist nur die **erste** Quelle.
-   Die interne Loader-API spricht einen **quellen-agnostischen** `Program`-Deskriptor (Metadaten +
-   Roh-Image-Bytes), nicht das Archivformat. Künftige Quellen (Dateisystem, Flash, Netzwerk) liefern
-   denselben `Program` → `load_image` bleibt unverändert. Der Archiv-Parser ist nur **ein** Produzent.
-4. **Stabile numerische Program-ID.** Jeder Eintrag trägt eine **`program_id`** (überdauert
-   Namensänderungen) zusätzlich zu `name`, `version`, `domain`, `hash`. IDs sind stabil für
-   Hot-Reload, Logs, Debugging; Namen sind nur menschenlesbar.
+1. **Loader as its own kernel service, small public API.** The loader lives in the kernel, but is
+   its own module (`kernel/src/loader.rs` + crate `caprock-loader`) with a **minimal** public
+   API: at its core a single operation `loader::load_image(&Program, …) -> Result<Pd, LoaderError>`.
+   Thus it stays formally analysable + later exchangeable.
+2. **Parse ELF entirely in safe Rust.** All header/offset/size checks live in the crate
+   `caprock-loader` (`#![forbid(unsafe_code)]`). `unsafe` arises **only** when copying already
+   **validated** segments into the target memory (kernel glue) — never in the parser.
+3. **Source exchangeable — API NOT archive-dependent.** The boot archive is only the **first** source.
+   The internal loader API speaks a **source-agnostic** `Program` descriptor (metadata + raw
+   image bytes), not the archive format. Future sources (file system, flash, network) deliver
+   the same `Program` → `load_image` stays unchanged. The archive parser is only **one** producer.
+4. **Stable numeric program ID.** Every entry carries a **`program_id`** (survives
+   name changes) in addition to `name`, `version`, `domain`, `hash`. IDs are stable for
+   hot reload, logs, debugging; names are only human-readable.
 
-## Architekturvergleich
+## Architecture comparison
 
-| Kriterium | **A: In-Kernel, cap-gegatet** ✅ | B: Userspace-Loader-Server | C: Hybrid |
+| Criterion | **A: in-kernel, cap-gated** ✅ | B: userspace loader server | C: hybrid |
 |---|---|---|---|
-| ELF-Parse | im Kernel (TCB; minimal+Fuzzer) | im Userspace (Bug isoliert) | im Kernel/Root wählbar |
-| Neue Syscalls | **0–1** (`SYS_LOAD`) | **viele, God-Mode-nah** | 1 |
-| Neue Angriffsfläche | klein | **groß** (PD-Fabrik + Fremd-Cap-Install) | mittel |
-| Bootstrap | keiner | In-Kernel-Bootstrap nötig | mittel |
-| „keine Sonderrechte" | Laden cap-gegatet, Caps via checked-Pfad | reinste Lesart | cap-gegatet |
-| Komplexität | gering | hoch | mittel |
+| ELF parse | in the kernel (TCB; minimal+fuzzer) | in userspace (bug isolated) | selectable in kernel/root |
+| New syscalls | **0–1** (`SYS_LOAD`) | **many, close to god mode** | 1 |
+| New attack surface | small | **large** (PD factory + foreign-cap install) | medium |
+| Bootstrap | none | in-kernel bootstrap needed | medium |
+| "no special rights" | loading cap-gated, caps via checked path | purest reading | cap-gated |
+| Complexity | low | high | medium |
 
-**Gewählt: A.** B ist philosophisch reiner (Parser aus dem TCB), erkauft das aber mit Syscalls, die
-fremde PDs erzeugen und beliebige Caps in fremde PDs installieren — genau die mächtigen Primitive,
-die die TCB-Reduktion zunichtemachen. A hält den TCB-Zuwachs auf einen minimalen, fuzzbaren
-ELF-Parser begrenzt und nutzt die bestehenden cap-/domänen-geprüften Pfade.
+**Chosen: A.** B is philosophically purer (parser out of the TCB), but buys that with syscalls that
+create foreign PDs and install arbitrary caps into foreign PDs — exactly the powerful primitives
+that negate the TCB reduction. A keeps the TCB growth limited to a minimal, fuzzable
+ELF parser and uses the existing cap/domain-checked paths.
 
-## Sicherheitsmodell / Invarianten
+## Security model / invariants
 
-- **Loader-Autorität:** ohne `Loader`-Cap kein `SYS_LOAD` (`ERR_BADCAP`). Der Loader gewährt nur
-  Caps, die der Aufrufer hält (Delegation, keine Erzeugung aus dem Nichts).
-- **Domänen-Policy unverändert:** alle initialen Caps über `install_cap_checked`; Domäne bei
-  PD-Erzeugung fix + unveränderlich; `domain_audit` greift weiter (HW nur HardwareLand, PdControl
-  nur TrustedSas, untrusted isoliert).
-- **W^X:** geladene Code-Segmente RX, Daten RW/RO — `vspace_audit` prüft weiter (keine
-  EL0-Seite W+X).
-- **Region-Balance:** geladene Segment-Regionen via Region-Runtime; Teardown gibt alle zurück
-  (`churn`/Balance-Audit gilt).
-- **Neuer `loader_audit`:** geladene Images konsistent — Segmente disjunkt, innerhalb der
-  PD-Regionen, W^X korrekt, Domäne == Manifest, kein Segment überlappt Kernel-Image/andere PDs.
-- **Neuer Loader-Fuzzer:** **fehlerhafte ELFs/Archiv** (abgeschnitten, Bad-Offsets, Memsz<Filesz,
-  überlappende Segmente, Riesen-Memsz, Bad-Entry, W^X-Verletzung im Manifest, Bad-Magic) müssen
-  **abgelehnt** werden, **ohne** den Kernel zu kompromittieren (kein Panic, kein OOB).
-- **EL1-Vorbehalt:** TrustedSAS-Laden nur signatur-verifiziert (sobald implementiert); bis dahin
-  EL1-Laden defaultmäßig abgelehnt.
+- **Loader authority:** without a `Loader` cap no `SYS_LOAD` (`ERR_BADCAP`). The loader grants only
+  caps that the caller holds (delegation, no creation out of nothing).
+- **Domain policy unchanged:** all initial caps via `install_cap_checked`; domain fixed and
+  immutable at PD creation; `domain_audit` continues to apply (HW only HardwareLand, PdControl
+  only TrustedSas, untrusted isolated).
+- **W^X:** loaded code segments RX, data RW/RO — `vspace_audit` continues to check (no
+  EL0 page W+X).
+- **Region balance:** loaded segment regions via the region runtime; teardown returns all
+  (`churn`/balance audit applies).
+- **New `loader_audit`:** loaded images consistent — segments disjoint, inside the
+  PD regions, W^X correct, domain == manifest, no segment overlaps the kernel image/other PDs.
+- **New loader fuzzer:** **faulty ELFs/archives** (truncated, bad offsets, memsz<filesz,
+  overlapping segments, huge memsz, bad entry, W^X violation in the manifest, bad magic) must be
+  **rejected** **without** compromising the kernel (no panic, no OOB).
+- **EL1 reservation:** TrustedSAS loading only signature-verified (once implemented); until then
+  EL1 loading is rejected by default.
 
-## Konsequenzen
+## Consequences
 
-- **Neue Strukturen außerhalb des Kernels:** `programs/{trusted,hardware,userland}/…` und
-  `tests/{trusted,hardware,userland}-test-N/` als **unabhängige** Cargo-Projekte (eigenes
-  Target/Linker, eigene Build/Docs/Tests, keine Querabhängigkeiten). Ein gemeinsames, minimales
-  **SDK-Crate** (`libcaprock`: Syscall-Stubs, `_start`/crt0, Panic-Handler, Boot-Info) ist eine
-  *gemeinsame* Abhängigkeit, **keine** gegenseitige zwischen Diensten.
-- **Kerneländerung (sanktioniert):** ELF-Loader-Modul, `ObjectKind::Loader`, `SYS_LOAD`,
-  Boot-Archiv-Leser, Allokator-Fenster-Reservierung, `loader_audit` + Fuzzer. Die bestehende
-  Microkernel-Semantik (IPC, Caps, Domänen, DMA, Hot-Reload) bleibt **unverändert**; der Loader
-  *nutzt* sie nur.
-- **Bewusst aufgeschoben:** Relokationen/Static-PIE (für beliebig platzierbares TrustedSAS),
-  echte Signatur-/Hash-Verifikation, Laufzeit-Archiv-Update über IPC, Demand-Paging.
-- **Wichtige Ehrlichkeit (Testumgebung):** kernel-only Cap-Operationen (copy/mint/install/spawn/
-  revoke) sind **aus keinem geladenen Prozess** aufrufbar (kein Syscall, keine Linkage) — auch
-  nicht aus EL1-TrustedSAS-Binaries. Adversariale **Cap-/CDT-Angriffe** bleiben daher in der
-  **In-Kernel-Selftest-Suite**; geladene EL0-Prozesse greifen über die **Syscall-ABI** an
-  (ungültige Cap-Indizes, falsche Rechte, IPC an nicht besessene Endpunkte, MAP auf Fremdspeicher,
-  PDCTL ohne Autorität, Fluten, Rennen). Das ist die korrekte, ehrliche Abgrenzung.
+- **New structures outside the kernel:** `programs/{trusted,hardware,userland}/…` and
+  `tests/{trusted,hardware,userland}-test-N/` as **independent** Cargo projects (own
+  target/linker, own build/docs/tests, no cross-dependencies). A common, minimal
+  **SDK crate** (`libcaprock`: syscall stubs, `_start`/crt0, panic handler, boot info) is a
+  *common* dependency, **not** a mutual one between services.
+- **Kernel change (sanctioned):** ELF loader module, `ObjectKind::Loader`, `SYS_LOAD`,
+  boot archive reader, allocator window reservation, `loader_audit` + fuzzer. The existing
+  microkernel semantics (IPC, caps, domains, DMA, hot reload) remain **unchanged**; the loader
+  only *uses* them.
+- **Deliberately deferred:** relocations/static PIE (for arbitrarily placeable TrustedSAS),
+  real signature/hash verification, run-time archive update via IPC, demand paging.
+- **Important honesty (test environment):** kernel-only cap operations (copy/mint/install/spawn/
+  revoke) are callable from **no loaded process** (no syscall, no linkage) — not even
+  from EL1 TrustedSAS binaries. Adversarial **cap/CDT attacks** therefore remain in the
+  **in-kernel self-test suite**; loaded EL0 processes attack via the **syscall ABI**
+  (invalid cap indices, wrong rights, IPC to non-owned endpoints, MAP onto foreign memory,
+  PDCTL without authority, flooding, races). That is the correct, honest delimitation.

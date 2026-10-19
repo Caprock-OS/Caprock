@@ -1,100 +1,99 @@
-# ADR 0007 — Drei Sicherheitsdomänen (Trusted-SAS / HardwareLand / UserLand)
+# ADR 0007 — Three security domains (Trusted-SAS / HardwareLand / UserLand)
 
-Status: **Akzeptiert** (ext-22, umgesetzt P1–P6)
+Status: **Accepted** (ext-22, implemented P1–P6)
 
-## Kontext
+## Context
 
-Caprock hatte bis ext-21 zwei *operative* Prozessklassen: SAS-PDs (globaler
-Adressraum, vertrauenswürdiges Rust) und isolierte PDs (eigene VSpace+ASID). Es gab
-**keinen** Domänen-Begriff, keine Hardware-Capabilities (IRQs/MMIO waren kernel-intern),
-keine Management-Capabilities und keine erzwungene Kommunikations-Policy — Kommunikation
-war rein Cap-Besitz-basiert.
+Up to ext-21 Caprock had two *operational* process classes: SAS PDs (global
+address space, trustworthy Rust) and isolated PDs (own VSpace+ASID). There was
+**no** domain concept, no hardware capabilities (IRQs/MMIO were kernel-internal),
+no management capabilities and no enforced communication policy — communication
+was purely based on cap possession.
 
-Ziel: drei **kernel-getrennte, auditierbare** Domänen, sodass nahezu der gesamte OS-Code
-speichersicheres Rust bleibt und nur die unvermeidlichen Hardwarezugriffe in kleinen,
-isolierten Backends stattfinden.
+Goal: three **kernel-separated, auditable** domains, so that almost all OS code
+remains memory-safe Rust and only the unavoidable hardware accesses take place in small,
+isolated backends.
 
-## Entscheidung
+## Decision
 
-**Domäne = Policy, VSpace = Isolationsmechanismus.** Jede Protection Domain trägt ein
-**unveränderliches** Domänen-Attribut, das die erlaubten Cap-Typen und
-Kommunikationsbeziehungen bestimmt. Die eigene VSpace setzt die Isolation nur durch.
+**Domain = policy, VSpace = isolation mechanism.** Every protection domain carries an
+**immutable** domain attribute that determines the permitted cap types and
+communication relationships. The own VSpace merely enforces the isolation.
 
-- **Trusted-SAS** — globaler Adressraum (VSPACE_OF==0), nur speichersicheres Rust ohne
-  `unsafe`. Treiber-/Protokolllogik. Default für alle Altbestand-PDs.
-- **HardwareLand** — isolierte VSpace, hält Hardware-Caps (MMIO/IRQ), kleiner `unsafe`-Kern.
-  Genau **ein** unveränderlicher Trusted-SAS-Partner; kommuniziert ausschließlich mit ihm.
-- **UserLand** — isolierte VSpace, keinerlei Hardware-Rechte, keine direkte Kommunikation
-  mit HardwareLand.
+- **Trusted-SAS** — global address space (VSPACE_OF==0), only memory-safe Rust without
+  `unsafe`. Driver/protocol logic. Default for all legacy PDs.
+- **HardwareLand** — isolated VSpace, holds hardware caps (MMIO/IRQ), small `unsafe` core.
+  Exactly **one** immutable Trusted-SAS partner; communicates exclusively with it.
+- **UserLand** — isolated VSpace, no hardware rights whatsoever, no direct communication
+  with HardwareLand.
 
-### Verglichene Varianten (Domänenmodell)
-- **A — reine Cap-Konvention (kein Kernel-Tag):** minimal, aber keine erzwingbare/
-  auditierbare Invariante. **Verworfen.**
-- **B — Domänen-Tag am `Pd` + Kernel-Enforcement (gewählt):** auditierbar, erzwingbar,
-  komponiert mit dem bestehenden PD/VSpace/Cap-Modell ohne Mediator; ermöglicht ein
-  `domain_audit()`-Oracle.
-- **C — Domäne als Cap-Objekt + Policy-Server:** schwergewichtig, Mediator wird Engpass.
-  **Verworfen.**
+### Variants compared (domain model)
+- **A — pure cap convention (no kernel tag):** minimal, but no enforceable/
+  auditable invariant. **Rejected.**
+- **B — domain tag on the `Pd` + kernel enforcement (chosen):** auditable, enforceable,
+  composes with the existing PD/VSpace/cap model without a mediator; enables a
+  `domain_audit()` oracle.
+- **C — domain as a cap object + policy server:** heavyweight, the mediator becomes a bottleneck.
+  **Rejected.**
 
-### Erzwungene Invarianten
-1. **Cap-Typ-Policy** (`Caps::install_cap_checked`, zentraler Punkt): Hardware-Caps
-   (`Mmio`/`Irq`, generische Kategorie `kind_is_hardware` — `Dma` später ohne ABI-Änderung
-   einhängbar) **nur** in HardwareLand; `PdControl` **nur** in TrustedSas.
-2. **Isolation**: untrusted Domänen (HardwareLand/UserLand) **müssen** isoliert laufen
-   (VSPACE_OF!=0). TrustedSas darf isoliert ODER global laufen (mehr Isolation ist keine
-   Verletzung — wichtig für Rückwärtskompatibilität). Geprüft nur für **lebende** Threads.
-3. **Unveränderliche paarweise Bindung**: ein HardwareLand-Backend wird bei der Erzeugung
-   (`create_hardware_backend`) an genau einen TrustedSas-Partner + genau einen Kanal
-   (Endpoint+Notification) gebunden; es darf **nur** Kommunikations-Caps für diesen Kanal
-   halten. Kardinalität **1 Trusted : N HardwareLand** (strukturell; N:1 ausgeschlossen,
-   da `partner` ein Einzelfeld ist). Stabile `backend_id` (für künftige Mehrgeräte/Hotplug).
-4. **Management nur cap-gated** (`ObjectKind::PdControl` + `SYS_PDCTL`): nur eine TrustedSas-
-   PD mit der `PdControl`-Cap für eine UserLand-Ziel-PD darf deren Lifecycle steuern
-   (PAUSE/RESUME/START/STOP); jede Op ist auf Cap + caller==TrustedSas + target==UserLand
-   gegated.
-5. **W^X auch für Device-Mappings**: Device-Seiten sind stets PXN|UXN; `vspace_device_wx_ok`
-   prüft es.
+### Enforced invariants
+1. **Cap-type policy** (`Caps::install_cap_checked`, central point): hardware caps
+   (`Mmio`/`Irq`, generic category `kind_is_hardware` — `Dma` can be hooked in later without an ABI change)
+   **only** in HardwareLand; `PdControl` **only** in TrustedSas.
+2. **Isolation**: untrusted domains (HardwareLand/UserLand) **must** run isolated
+   (VSPACE_OF!=0). TrustedSas may run isolated OR global (more isolation is not a
+   violation — important for backward compatibility). Checked only for **live** threads.
+3. **Immutable pairwise binding**: a HardwareLand backend is bound at creation
+   (`create_hardware_backend`) to exactly one TrustedSas partner + exactly one channel
+   (endpoint+notification); it may hold **only** communication caps for this channel.
+   Cardinality **1 trusted : N HardwareLand** (structural; N:1 excluded,
+   since `partner` is a single field). Stable `backend_id` (for future multi-device/hotplug).
+4. **Management only cap-gated** (`ObjectKind::PdControl` + `SYS_PDCTL`): only a TrustedSas
+   PD with the `PdControl` cap for a UserLand target PD may control its lifecycle
+   (PAUSE/RESUME/START/STOP); every op is gated on cap + caller==TrustedSas + target==UserLand.
+5. **W^X also for device mappings**: device pages are always PXN|UXN; `vspace_device_wx_ok`
+   checks it.
 
-All dies ist im `domain_audit()`-Oracle gebündelt (Codes 1=HW-Cap falsche Domäne,
-2=PdControl falsche Domäne, 3=untrusted läuft global, 4=Backend ohne Trusted-Partner,
-5=Backend hält Fremd-Comm-Cap) und in `ipc_audit()` (Code 30+) aggregiert — beide Fuzzer
-prüfen es laufend.
+All of this is bundled in the `domain_audit()` oracle (codes 1=HW cap wrong domain,
+2=PdControl wrong domain, 3=untrusted runs global, 4=backend without trusted partner,
+5=backend holds foreign comm cap) and aggregated in `ipc_audit()` (code 30+) — both fuzzers
+check it continuously.
 
-### Generische Hardware-Infrastruktur (HardwareLand)
-- **MMIO**: `vspace_map_device` mappt **beliebige** MMIO-Regionen EL0-Device (Device-nGnRnE,
-  PXN|UXN, nG) in eine isolierte VSpace; spaltet den GiB-0-1-GiB-Device-Block bei Bedarf in
-  L2/L3 auf (Rest EL1-only → Kernel-MMIO bleibt erreichbar). `MmioCap` ist nur kernelseitig
-  prägbar (kein User-Syscall fordert beliebige Bereiche an), nur in HardwareLand installierbar.
-  **`Mmio`/`Irq`-Delete fasst den RAM-Allokator NIE an** (Gerät != RAM).
-- **IRQ**: `IrqCap` + `route_spi` (GICD_ITARGETSR — fehlte; ohne Routing erreicht ein SPI
-  keinen Kern) + **Deferred-Zustellung**: `handle_irq` (IRQ-Kontext) ist LOCK-FREI (Atomics +
-  GIC-Maske + EOI), setzt pending; der Reschedule-Pfad drained VOR dem SCHEDS-Lock und
-  signalisiert die gebundene Notification (`signal_from_kernel`).
+### Generic hardware infrastructure (HardwareLand)
+- **MMIO**: `vspace_map_device` maps **arbitrary** MMIO regions EL0-device (Device-nGnRnE,
+  PXN|UXN, nG) into an isolated VSpace; splits the GiB-0 1-GiB device block into
+  L2/L3 if needed (rest EL1-only → kernel MMIO stays reachable). `MmioCap` can only be minted
+  kernel-side (no user syscall requests arbitrary ranges), installable only in HardwareLand.
+  **`Mmio`/`Irq` delete NEVER touches the RAM allocator** (device != RAM).
+- **IRQ**: `IrqCap` + `route_spi` (GICD_ITARGETSR — was missing; without routing an SPI
+  reaches no core) + **deferred delivery**: `handle_irq` (IRQ context) is LOCK-FREE (atomics +
+  GIC mask + EOI), sets pending; the reschedule path drains BEFORE the SCHEDS lock and
+  signals the bound notification (`signal_from_kernel`).
 
-PL031-RTC ist der erste Proof of Concept dieser generischen Infrastruktur (MMIO-Read +
-Match-IRQ); UART/VirtIO/NVMe/USB/GPU nutzen dieselben Primitive unverändert.
+The PL031 RTC is the first proof of concept of this generic infrastructure (MMIO read +
+match IRQ); UART/VirtIO/NVMe/USB/GPU use the same primitives unchanged.
 
-## IRQ-Lock-Sicherheit (make-or-break)
+## IRQ lock safety (make-or-break)
 
-Die Deferred-IRQ-Zustellung ist **deadlock-frei**, weil:
-- IRQs sind **im gesamten Trap maskiert** (boot.rs `daifset #0xf`; DAIF wird erst beim `eret`
-  aus SPSR wiederhergestellt). Ein Kern, der `NTFNS`/`SCHEDS`/`EPS` hält (stets innerhalb
-  eines Traps), kann daher **keinen** IRQ nehmen → **keine Same-Core-Reentranz**.
-- `handle_irq`/`irq_hook` nehmen **keinen** Lock (nur Atomics + GIC-MMIO).
-- `drain_pending_irqs` läuft im Reschedule-Pfad (Trap, IRQs maskiert) **vor** dem SCHEDS-Lock
-  und nimmt `NTFNS < SCHEDS` — die etablierte Ordnung. Cross-Core ist nur **begrenztes**
-  Spinnen (keine Zyklen, gleiche Ordnung wie alle Pfade).
+The deferred IRQ delivery is **deadlock-free** because:
+- IRQs are **masked throughout the trap** (boot.rs `daifset #0xf`; DAIF is only restored on `eret`
+  from SPSR). A core holding `NTFNS`/`SCHEDS`/`EPS` (always inside
+  a trap) can therefore **not** take an IRQ → **no same-core reentrancy**.
+- `handle_irq`/`irq_hook` take **no** lock (only atomics + GIC MMIO).
+- `drain_pending_irqs` runs in the reschedule path (trap, IRQs masked) **before** the SCHEDS lock
+  and takes `NTFNS < SCHEDS` — the established order. Cross-core there is only **bounded**
+  spinning (no cycles, same order as all paths).
 
-**Abhängigkeit (dokumentiert):** Diese Garantie beruht darauf, dass NTFNS/SCHEDS-Sektionen
-mit maskierten IRQs laufen (in-Trap). Würde künftig ein Pfad IRQs *innerhalb* eines Traps
-freigeben, müsste `drain_pending_irqs` weiterhin maskiert laufen.
+**Dependency (documented):** this guarantee rests on NTFNS/SCHEDS sections
+running with masked IRQs (in-trap). Should a path ever release IRQs *inside* a trap,
+`drain_pending_irqs` would still have to run masked.
 
-## Konsequenzen
-- HardwareLand ist mit **MMIO + IRQ** vollständig bewiesen (RTC am echten PL031).
-- `DmaCap` bleibt als HW-Cap-Kategorie **vorgehalten** (ohne ABI-/Strukturänderung
-  nachrüstbar) — Implementierung erst, wenn ein DMA-Gerät/Virtio vorliegt.
-- Bestehende 36 Checks unverändert grün (Default-Domäne TrustedSas ⇒ neue Prüfungen sind
-  für den Altbestand No-Ops). `./test-qemu.sh` = **42/42 ALL PASS**.
-- Sensitivitätsgeprüft: jede neue Invariante einzeln gebrochen → das zuständige Oracle/der
-  Test greift (domain-Regel 3, pdctl-Policy, chan-Kanal-Enforcement, rtc-Device-Mapping,
-  irq-SPI-Routing, hwfuzz-Baseline).
+## Consequences
+- HardwareLand is fully proved with **MMIO + IRQ** (RTC on the real PL031).
+- `DmaCap` stays **reserved** as an HW cap category (can be retrofitted without an ABI/structure
+  change) — implementation only once a DMA device/virtio is available.
+- Existing 36 checks remain green unchanged (default domain TrustedSas ⇒ new checks
+  are no-ops for the legacy stock). `./test-qemu.sh` = **42/42 ALL PASS**.
+- Sensitivity-checked: every new invariant broken individually → the responsible oracle/the
+  test catches it (domain rule 3, pdctl policy, chan channel enforcement, rtc device mapping,
+  irq SPI routing, hwfuzz baseline).
