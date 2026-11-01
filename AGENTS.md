@@ -88,9 +88,11 @@ Whoever owns changes without asking. Whoever does not own leaves a message below
   `build*.sh`, `docs/`.
 * **Shared, with message:** `kernel/src/system.rs`, `kernel/src/arch/x86_64/bringup.rs`,
   `kernel/src/main.rs`, `kernel/src/arch/x86_64/mod.rs`, `docs/invariants.md`, `TODO.md`,
-  `README.md`.
+  `README.md`, `flake.nix` (root devShell; additive, touches no owned file).
   Rule of thumb in `system.rs`: **A** changes syscall, cap and loader paths, **B** the memory,
   colour and telemetry paths.
+
+`.nix/` (gitignored) holds the per-repo rustup/cargo caches from the `flake.nix` devShell.
 
 ## The four real couplings
 

@@ -12,3 +12,7 @@
 
 # Agenten-Worktrees und Sitzungsdaten (mehrere GB, nie versionieren)
 .claude/
+
+# Nix
+.nix/
+.direnv/
