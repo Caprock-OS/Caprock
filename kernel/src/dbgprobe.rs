@@ -362,7 +362,7 @@ pub fn messen(prio: u8) {
     // gegattert. Eine Schranke aus einem ungeprueften Summanden ist keine Schranke, egal in welche
     // Richtung sie ausfaellt. Also **SKIP mit Grund**, und der Grund benennt die Vorbedingung:
     // solange C9 auf aarch64 nicht laeuft, ist die Zusage dort HERGELEITET und nicht gemessen.
-    let c9_laeuft = crate::sperrmark::eichstand() > 0 && crate::sperrmark::tickrate() > 0;
+    let c9_laeuft = cfg!(target_arch = "x86_64") && crate::sperrmark::eichstand() > 0 && crate::sperrmark::tickrate() > 0;
     let maskiert_max = crate::sperrmark::hoechststand_bereinigt();
     let schlimmstfall = maskiert_max.saturating_add(p99);
     let schlimmstfall_ok = !messbar || !c9_laeuft || (tick > 0 && schlimmstfall <= tick);
