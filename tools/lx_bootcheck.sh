@@ -46,7 +46,7 @@ else
 fi
 
 echo "--- Werkzeugseite (Z11a gehoert hierher, nicht in einen Loader) ---"
-for w in tools/mkarchive.py tools/mkgpt.py tools/mkgrubiso.sh tools/checkfat.py tools/sign_manifest.py; do
+for w in tools/mkarchive.py tools/mkgpt.py tools/mkgrubiso.sh tools/checkfat.py tools/sign_manifest.py tools/dev-keys.sh; do
     if [ -f "$w" ]; then echo "  da: $w"; else echo "  FEHLT: $w"; fi
 done
 

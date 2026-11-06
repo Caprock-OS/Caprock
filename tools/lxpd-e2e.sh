@@ -125,8 +125,11 @@ TRUSTKEY=keys/trusted-test.ed25519
 python3 -c "import cryptography" 2>/dev/null || {
     echo "== FEHLT: Python-Paket 'cryptography' =="; exit 2; }
 
-echo "== Manifest-Schluessel =="
-python3 tools/gen_manifest_key.py --ensure || exit 2
+echo "== Schluessel sicherstellen (dev-keys.sh) =="
+DEVKEYS_OUT="$(tools/dev-keys.sh)" || exit 2
+case "$DEVKEYS_OUT" in *DEVKEYS_REBUILD=1*)
+    echo "  Schluessel neu erzeugt -> Kernel wird mit frischer Key-DB gebaut" ;;
+esac
 
 echo "== build (Kernel, --features selftest) =="
 ./build-x86.sh --features selftest >/dev/null 2>&1 || { echo "BUILD FAILED (Kernel)"; exit 1; }
@@ -145,24 +148,8 @@ echo "== build (Dienst-PD lxpdrv, standalone) =="
 
 echo "== zertifizieren (TrustedSAS: lxpdrv, program-id 7) =="
 mkdir -p certs build
-python3 tools/check_trusted_key.py
-KEYRC=$?
-if [ "$KEYRC" -eq 2 ]; then
-    echo "  FEHLER: TrustedSAS-Schluessel nicht pruefbar — kein Testergebnis ohne diese Pruefung."; exit 2
-fi
-if [ "$KEYRC" -ne 0 ]; then
-    if [ -f "$TRUSTKEY" ]; then
-        BEISEITE="$TRUSTKEY.passt-nicht-$(date +%Y%m%d-%H%M%S)"
-        mv "$TRUSTKEY" "$BEISEITE"
-        [ -f "$TRUSTKEY.pub" ] && mv "$TRUSTKEY.pub" "$BEISEITE.pub"
-        echo "  (alter Schluessel beiseitegelegt: $BEISEITE)"
-    fi
-    python3 tools/gen_trusted_key.py --name trusted-test >/dev/null 2>&1 || {
-        echo "  FEHLER: TrustedSAS-Schluessel liess sich nicht erzeugen"; exit 2; }
-    ./build-x86.sh --features selftest >/dev/null 2>&1 || { echo "BUILD FAILED (nach Key-Regen)"; exit 1; }
-    python3 tools/check_trusted_key.py || {
-        echo "  FEHLER: Schluessel passt auch nach Neuerzeugen nicht"; exit 2; }
-fi
+# TrustedSAS-Schlüssel ist oben vor dem Build über `tools/dev-keys.sh` sichergestellt
+# (ensure + Übereinstimmungs-Prüfung + Beiseitelegen bei Mismatch).
 python3 tools/sign_trusted.py --crate programs/lxpd-runtime --elf "$PROG/lxpdrv.elf" \
     --program-id 7 --version 1 --policy internal-test --key "$TRUSTKEY" \
     --out certs/lxpdrv-x86.cert >/dev/null 2>&1 || { echo "  FEHLER: lxpdrv liess sich nicht zertifizieren"; exit 2; }

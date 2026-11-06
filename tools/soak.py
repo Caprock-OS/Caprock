@@ -69,6 +69,14 @@ def sign(crate, elf, pid, ver, out):
 
 def build():
     print("== build (release, FEATURE soak) + Programme + Testdienste + signiertes Archiv ==", flush=True)
+    # Schlüssel-Bootstrap (ensure manifest + trusted, konsistent zur Key-DB) — MUSS vor dem Build
+    # laufen, damit die frischen öffentlichen Schlüssel in den Kernel kompiliert werden. Das schloss
+    # die Lücke: soak.py signierte TrustedSAS-Zertifikate, ohne je den Trusted-Schlüssel
+    # sicherzustellen (frischer Clone → keys/ fehlt → sign_trusted.py schlug fehl).
+    kr = subprocess.run(["bash", "tools/dev-keys.sh"], cwd=ROOT,
+                         capture_output=True, text=True)
+    if kr.returncode != 0:
+        sys.exit(f"DEV-KEYS FEHLGESCHLAGEN (rc={kr.returncode}):\n{kr.stdout}\n{kr.stderr}")
     if sh(["./build.sh", "--features", "soak"]).returncode != 0:
         sys.exit("BUILD FAILED")
     if sh("cd programs && rustup run nightly cargo build --release").returncode != 0:

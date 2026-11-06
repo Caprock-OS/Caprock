@@ -46,8 +46,11 @@ python3 -c "import cryptography" 2>/dev/null || {
 # mehrfach bezahlt (docs/plan-betriebsbereit.md, Stufe 0, Punkt 2). Vorhandene Schluessel bleiben
 # unangetastet; fehlt das Paar, entsteht es und die in den Kernel kompilierte Key-DB wird neu
 # geschrieben (danach MUSS neu gebaut werden -- deshalb steht das hier vor dem Build).
-echo "== Manifest-Schluessel =="
-python3 tools/gen_manifest_key.py --ensure || exit 2
+echo "== Schluessel sicherstellen (dev-keys.sh) =="
+DEVKEYS_OUT="$(tools/dev-keys.sh)" || exit 2
+case "$DEVKEYS_OUT" in *DEVKEYS_REBUILD=1*)
+    echo "  Schluessel neu erzeugt -> Kernel wird mit frischer Key-DB gebaut" ;;
+esac
 
 echo "== build (Kernel, --features selftest) =="
 # `--features selftest` ausdruecklich (nicht ueber `default`): seit A-2.2 ist `selftest` NICHT mehr
@@ -68,49 +71,8 @@ mkdir -p certs build
 # dieses Binary gebundenes Zertifikat laedt der Kernel ihn nicht (ADR 0014). Das Zertifikat kommt
 # aus DEMSELBEN Werkzeug wie auf ARM; ohne den privaten TrustedSAS-Schluessel entsteht keines.
 TRUSTKEY=keys/trusted-test.ed25519
-# Geprueft wird, ob der Schluessel PASST -- nicht bloss, ob er da ist.
-#
-# `kernel/src/trusted_keys.rs` ist versioniert und traegt den oeffentlichen Schluessel dessen,
-# der ihn zuletzt erzeugt hat; der private unter `keys/` ist es nicht (zu Recht). Wer einen
-# fremden `trusted_keys.rs` zieht, waehrend lokal ein eigener privater Schluessel liegt, hat
-# zwei Haelften, die nicht zusammengehoeren. Die alte Pruefung (`[ ! -f ]`) sah das nicht, und
-# der Lauf endete mit
-#     root    : FAILURES (Rejected(Unverified))
-# -- einer Zeile, die wie ein Testergebnis aussieht und ein Aufbauproblem ist. Am 2026-08-01
-# genau so aufgetreten, nach einem Pull vom Server.
-#
-# rc=2 heisst "nicht entscheidbar" und wird NICHT als in Ordnung gewertet: ein Pruefer, der
-# nicht pruefen konnte, hat nichts belegt.
-python3 tools/check_trusted_key.py
-KEYRC=$?
-if [ "$KEYRC" -eq 2 ]; then
-    echo "  FEHLER: der TrustedSAS-Schluessel liess sich nicht gegen den eingebetteten pruefen."
-    echo "          Das ist KEIN Testergebnis -- ohne diese Pruefung waere ein spaeteres"
-    echo "          'Rejected(Unverified)' nicht von einem echten Befund zu unterscheiden."
-    exit 2
-fi
-if [ "$KEYRC" -ne 0 ]; then
-    # `gen_trusted_key.py` weigert sich, einen vorhandenen privaten Schluessel zu
-    # ueberschreiben ("loeschen zum Neu-Erzeugen") -- eine bewusste Sicherung, die richtig ist.
-    # Also beiseitelegen statt loeschen: ein privater Schluessel ist nichts, was ein Testskript
-    # unwiderruflich wegwerfen darf, auch kein Testschluessel. Wer ihn doch braucht, findet ihn
-    # unter dem Zeitstempel wieder.
-    if [ -f "$TRUSTKEY" ]; then
-        BEISEITE="$TRUSTKEY.passt-nicht-$(date +%Y%m%d-%H%M%S)"
-        mv "$TRUSTKEY" "$BEISEITE"
-        [ -f "$TRUSTKEY.pub" ] && mv "$TRUSTKEY.pub" "$BEISEITE.pub"
-        echo "  (alter Schluessel beiseitegelegt: $BEISEITE)"
-    fi
-    python3 tools/gen_trusted_key.py --name trusted-test >/dev/null 2>&1 || {
-        echo "  FEHLER: TrustedSAS-Schluessel liess sich nicht erzeugen"; exit 2; }
-    echo "  (Schluessel fehlte oder passte nicht -> neu erzeugt, kernel/src/trusted_keys.rs"
-    echo "   regeneriert, Kernel wird neu gebaut. Die Aenderung an trusted_keys.rs ist LOKAL"
-    echo "   und gehoert nicht committet, solange nicht alle denselben Schluessel nutzen.)"
-    ./build-x86.sh --features selftest >/dev/null 2>&1 || { echo "BUILD FAILED (nach Key-Regen)"; exit 1; }
-    python3 tools/check_trusted_key.py || {
-        echo "  FEHLER: auch nach dem Neuerzeugen passt der Schluessel nicht -- hier stimmt"
-        echo "          etwas Grundsaetzliches nicht (gen_trusted_key.py? Pfade?)"; exit 2; }
-fi
+# Schlüssel-Bootstrap (ensure manifest + trusted, Übereinstimmungs-Prüfung incl. Beiseitelegen
+# bei Mismatch) läuft oben vor dem Build über `tools/dev-keys.sh`. Hier nur noch die Variable.
 python3 tools/sign_trusted.py --crate programs/trusted/init --elf "$PROG/init.elf" \
     --program-id 1 --version 1 --policy internal-test --key "$TRUSTKEY" \
     --out certs/init-x86.cert >/dev/null 2>&1 || { echo "  FEHLER: init liess sich nicht zertifizieren"; exit 2; }

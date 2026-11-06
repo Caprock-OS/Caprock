@@ -16,9 +16,26 @@ Syscall, der sie modifiziert. Private Schlüssel liegen **ausschließlich** loka
 | Tool | Zweck |
 |---|---|
 | `tools/gen_trusted_key.py` | Ed25519-Keypair erzeugen + Key-DB (`trusted_keys.rs`) generieren |
+| `tools/gen_manifest_key.py` | System-Manifest-Root-Schlüssel (A-1.3): Paar + `manifest_keys.rs` |
+| `tools/dev-keys.sh` | **EIN** Bootstrap: sichert beide Paare (ensure) + Konsistenz-Prüfung, meldet Rebuild |
 | `tools/sign_trusted.py` | Programm auditieren (Unsafe-Allowlist) + hashen + signieren → Zertifikat |
 
 Voraussetzung: `python-cryptography` (Host). Kein RNG/Privatschlüssel im Kernel.
+
+## A0. Standard-Bootstrap (alle Suiten)
+
+Die Test-/Lade-Suiten rufen **eine** Stelle auf, statt die Schlüssel-Logik je Suite zu
+duplizieren:
+
+```sh
+tools/dev-keys.sh          # rc 0 ok; rc 2 nicht entscheidbar
+# stdout: DEVKEYS_REBUILD=1 → Kernel MUSS neu gebaut werden (frische Key-DB)
+```
+
+`dev-keys.sh` macht: ensure `gen_manifest_key.py --ensure` + TrustedSAS-Schlüssel mit
+Übereinstimmungs-Prüfung (`check_trusted_key.py`), Beiseitelegen bei Mismatch, Neu-Erzeugen, und
+meldet `DEVKEYS_REBUILD=1`, wenn sich eine Key-DB geändert hat. Sie gehört **vor** den Kernel-Build
+(die DB wird in den Kernel kompiliert). Der manuelle Ablauf unten bleibt für Rotation/Revocation gültig.
 
 ## A. Erst-Setup (neuer Root-Schlüssel)
 

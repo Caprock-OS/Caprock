@@ -38,7 +38,11 @@ python3 -c "import cryptography" 2>/dev/null || {
     exit 2
 }
 MANKEY=keys/manifest-test.manifest.ed25519
-python3 tools/gen_manifest_key.py --ensure >/dev/null || exit 2
+echo "== Schluessel sicherstellen (dev-keys.sh) =="
+DEVKEYS_OUT="$(tools/dev-keys.sh)" || exit 2
+case "$DEVKEYS_OUT" in *DEVKEYS_REBUILD=1*)
+    echo "  Schluessel neu erzeugt -> Kernel wird mit frischer Key-DB gebaut" ;;
+esac
 
 echo "== build ${FEAT:-(release, ohne Fuzzer)} =="
 ./build.sh $FEAT >/dev/null 2>&1 || { echo "BUILD FAILED"; exit 1; }
@@ -65,71 +69,10 @@ printf 'PLACEHOLDER' > build/_probe.bin
 # zum Archiv-Eintrag passen (Identitaets-Bindung). Schluessel: keys/trusted-test (privat, gitignored).
 mkdir -p certs
 
-# **B-2.1: aus einem frischen Clone lauffaehig.** `keys/` ist gitignored -- bis hierher scheiterte
-# diese Suite bei jedem, der das Repo neu ausgecheckt hat, an einem fehlenden Schluessel. Damit war
-# der GESAMTE aarch64-Zweig ungeprueft, und genau diese Fehlerform hat das Projekt schon mehrfach
-# bezahlt (leere Event-Queue, nie ausgefuehrter x86-Testpfad, DMAR-Ausschlusspfad).
-#
-# Der Weg ist derselbe wie auf der x86-Seite (Strang A, `test-qemu-x86-load.sh`): **erzeugen statt
-# einchecken**. Ein privater Schluessel im Repo waere bei einem Open-Source-Projekt kein
-# Testschluessel, sondern ein veroeffentlichter -- und der Vermerk "nur fuer Tests" haelt genau so
-# lange, wie jemand ihn liest. Der Preis ist ein maschinenlokaler Wert im Image: er kostet
-# Reproduzierbarkeit ZWISCHEN Entwicklern, nicht INNERHALB eines Checkouts, und nur Letzteres
-# braucht die Suite.
-#
-# Reihenfolge ist zwingend: die Key-DB (`kernel/src/trusted_keys.rs`) wird in den Kernel
-# **kompiliert**. Ein neu erzeugter Schluessel nach dem Build waere ein Schluessel, den das laufende
-# Image nicht kennt. Deshalb hier, VOR `./build.sh`.
-# **Geprueft wird die UEBEREINSTIMMUNG, nicht die EXISTENZ** (2026-08-13).
-#
-# Hier stand `[ ! -f keys/trusted-test.ed25519 ]`. Die x86-Lade-Suite hat genau diese Pruefung am
-# 2026-08-01 ersetzt, mit Begruendung im Skript und einem eigenen Werkzeug
-# (`tools/check_trusted_key.py`) -- und diese Suite behielt die alte Fassung. **Zwei Suiten, die
-# dasselbe verschieden aufsetzen, sind ein Riss**, und dieser hier ist am 2026-08-13 wieder
-# eingetreten:
-#
-#   `kernel/src/trusted_keys.rs` ist versioniert und traegt den OEFFENTLICHEN Schluessel; der
-#   private unter `keys/` ist es nicht. Wer die Datei zuruecksetzt -- ein `git checkout`, ein Pull,
-#   oder das in `AGENTS.md` verlangte Aufraeumen am Sitzungsende --, hat zwei Haelften, die nicht
-#   zusammengehoeren. Die Existenzpruefung sieht das nicht, und der Lauf endet mit
-#
-#       root    : FAILURES (Rejected(Unverified)) -- kein Root-Task
-#
-#   plus drei weiteren roten Zeilen (`loadhw`, `aggrt`, `cross`), die alle daran haengen. Das
-#   sieht wie ein Kernelbefund aus und ist ein Aufbauproblem -- genau die Verwechslung, die dieses
-#   Projekt sonst ueberall vermeidet.
-#
-# `rc=2` heisst "nicht entscheidbar" und wird NICHT als in Ordnung gewertet: ein Pruefer, der nicht
-# pruefen konnte, hat nichts belegt.
-python3 tools/check_trusted_key.py
-KEYRC=$?
-if [ "$KEYRC" -eq 2 ]; then
-    echo "== FEHLER: der TrustedSAS-Schluessel liess sich nicht gegen den eingebetteten pruefen. =="
-    echo "   Das ist KEIN Testergebnis -- ohne diese Pruefung waere ein spaeteres"
-    echo "   'Rejected(Unverified)' nicht von einem echten Befund zu unterscheiden."
-    exit 2
-fi
-if [ "$KEYRC" -ne 0 ]; then
-    # `gen_trusted_key.py` weigert sich, einen vorhandenen privaten Schluessel zu ueberschreiben --
-    # eine bewusste Sicherung. Also beiseitelegen statt loeschen (dieselbe Behandlung wie in der
-    # x86-Lade-Suite): ein privater Schluessel ist nichts, was ein Testskript unwiderruflich
-    # wegwerfen darf, auch kein Testschluessel.
-    if [ -f keys/trusted-test.ed25519 ]; then
-        BEISEITE="keys/trusted-test.ed25519.passt-nicht-$(date +%Y%m%d-%H%M%S)"
-        mv keys/trusted-test.ed25519 "$BEISEITE"
-        [ -f keys/trusted-test.ed25519.pub ] && mv keys/trusted-test.ed25519.pub "$BEISEITE.pub"
-        echo "== TrustedSAS-Schluessel passte nicht zum eingebetteten -> beiseite: $BEISEITE =="
-    else
-        echo "== TrustedSAS-Testschluessel fehlt -> erzeugen (frischer Clone) =="
-    fi
-    python3 tools/gen_trusted_key.py --name trusted-test >/dev/null 2>&1 || {
-        echo "SCHLUESSEL-ERZEUGUNG FEHLGESCHLAGEN"; exit 2; }
-    echo "   erzeugt; kernel/src/trusted_keys.rs regeneriert -> Kernel wird neu gebaut"
-    ./build.sh $FEAT >/dev/null 2>&1 || { echo "BUILD FAILED (nach Key-Regen)"; exit 1; }
-    python3 tools/check_trusted_key.py || {
-        echo "   FEHLER: auch nach dem Neuerzeugen passt der Schluessel nicht -- hier stimmt"
-        echo "           etwas Grundsaetzliches nicht (gen_trusted_key.py? Pfade?)"; exit 2; }
-fi
+# Schlüssel-Bootstrap läuft JETZT vor dem Build über `tools/dev-keys.sh` — eine Stelle für alle
+# Suiten: ensure manifest + trusted, Übereinstimmungs-Prüfung (check_trusted_key.py), Beiseitelegen
+# bei Mismatch, und der Rebuild-Marker DEVKEYS_REBUILD. Die frühere Inline-Prüfung ist entfallen;
+# der Kernel-Build unten wird mit frischer Key-DB gebaut.
 
 sign() { python3 tools/sign_trusted.py --key keys/trusted-test.ed25519 "$@" >/dev/null 2>&1; }
 sign --crate programs/trusted/svc-demo --elf "$SVCDEMO" --program-id 12 --version 1 \

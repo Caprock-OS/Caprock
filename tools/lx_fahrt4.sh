@@ -52,8 +52,11 @@ sha256sum "$TREIBER"
     || { echo "  FEHLER: unerwartete Groesse (Aufbau, kein Testergebnis)"; exit 2; }
 
 # --- Schluessel (ensure; aendert nichts, solange keys/ liegt) -----------------------
-echo "== Manifest-Schluessel =="
-python3 tools/gen_manifest_key.py --ensure || exit 2
+echo "== Schluessel sicherstellen (dev-keys.sh) =="
+DEVKEYS_OUT="$(tools/dev-keys.sh)" || exit 2
+case "$DEVKEYS_OUT" in *DEVKEYS_REBUILD=1*)
+    echo "  Schluessel neu erzeugt -> Kernel wird mit frischer Key-DB gebaut" ;;
+esac
 
 # --- Kernel + Programme (Manifest bindet an DIESEN Kernel-Hash) ---------------------
 echo "== build (Kernel, --features selftest) =="
@@ -67,7 +70,6 @@ echo "  Programme ok"
 
 echo "== zertifizieren (TrustedSAS: init, fs) =="
 mkdir -p certs
-python3 tools/check_trusted_key.py || { echo "FEHLER: TrustedSAS-Schluessel passt nicht (Aufbau)"; exit 2; }
 python3 tools/sign_trusted.py --crate programs/trusted/init --elf "$PROG/init.elf" \
     --program-id 1 --version 1 --policy internal-test --key "$TRUSTKEY" \
     --out certs/init-x86.cert >/dev/null 2>&1 || { echo "FEHLER: init-Zertifikat"; exit 2; }

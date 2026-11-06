@@ -41,12 +41,13 @@ def key_id(pub: bytes) -> bytes:
     return hashlib.sha256(pub).digest()[:16]
 
 
-def gen(name: str):
+def gen(name: str) -> bool:
+    """Erzeugt das Paar, falls es fehlt. Gibt zurueck, ob es ERZEUGT wurde."""
     os.makedirs(KEYS_DIR, exist_ok=True)
     priv_path = os.path.join(KEYS_DIR, f"{name}.ed25519")
     pub_path = os.path.join(KEYS_DIR, f"{name}.pub")
     if os.path.exists(priv_path):
-        sys.exit(f"Schluessel existiert bereits: {priv_path} (loeschen zum Neu-Erzeugen)")
+        return False
     sk = Ed25519PrivateKey.generate()
     priv = raw_priv(sk)
     pub = raw_pub(sk)
@@ -58,6 +59,7 @@ def gen(name: str):
         f.write(pub)
     print(f"erzeugt: {priv_path} (privat, gitignored) + {pub_path}")
     print(f"  key_id = {key_id(pub).hex()}")
+    return True
 
 
 def rust_bytes(b: bytes) -> str:
@@ -108,10 +110,14 @@ def regen_db():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--name", default="trusted-test")
-    ap.add_argument("--regen-db", action="store_true")
+    ap.add_argument("--regen-db", action="store_true", help="nur die DB neu schreiben")
+    ap.add_argument("--ensure", action="store_true", help="Paar nur erzeugen, wenn es fehlt")
     args = ap.parse_args()
     if not args.regen_db:
-        gen(args.name)
+        erzeugt = gen(args.name)
+        if not erzeugt and not args.ensure:
+            priv_path = os.path.join(KEYS_DIR, f"{args.name}.ed25519")
+            sys.stderr.write(f"gen_trusted_key: {priv_path} existiert bereits -- nichts erzeugt\n")
     regen_db()
 
 

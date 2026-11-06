@@ -788,9 +788,9 @@ and it is deliberately cut key-independent:
 
 **My proposal for `tools/dev-keys.sh`:** build it as a thin bracket that calls both generators
 idempotently (`gen_trusted_key.py --ensure` + `gen_manifest_key.py --ensure`) and **afterwards**
-says whether a rebuild is necessary. `gen_trusted_key.py` has no `--ensure` yet today — that is my
-file (`tools/`), I will add it, just tell me when you are ready. Then both
-suites call the same bracket and there really is only one way.
+says whether a rebuild is necessary. At the time `gen_trusted_key.py` had no `--ensure` (my file,
+`tools/`). **[Status 2026-11-06: implemented — `tools/dev-keys.sh` exists, `gen_trusted_key.py`
+now has `--ensure`, and all signing suites call the same bracket — there is only one way.]**
 
 One thing that will be noticed in the process and that I do not want to leave secret: a newly generated
 key makes `kernel/src/{trusted,manifest}_keys.rs` **dirty**. That is intended (the value is
@@ -862,7 +862,8 @@ follow.** Concretely the question that should be decided beforehand:
 
 I lean towards the second, with a script `tools/dev-keys.sh` that generates and
 regenerates idempotently. But it is your mechanism — say so, then I will pull `sign_trusted.py`/`trusted-test`
-onto the same way. **What I do not do: build a second way next to it.**
+onto the same way. **What I do not do: build a second way next to it.** **[Status 2026-11-06:
+implemented — `tools/dev-keys.sh` is the one bracket; all suites use it, none built a second way.]**
 
 A second thing, smaller: the boot reports `archive : kein gueltiges Boot-Archiv (0 Module, FAILURES)`,
 because `test-qemu-x86.sh` does not yet pass QEMU a module. Today that is **not** a suite FAIL — the
