@@ -56,6 +56,9 @@ context switch (no `TTBR` switch, no ASID round trip).
 - **−** Page-table set-up needed once (small, static code in the permitted
   `unsafe` domain "MMU init"). With 4 GiB of contiguous RAM a few
   block entries suffice (1 GiB/2 MiB blocks), no multi-level per-process walk.
+  For W^X the first **16 MiB** (the kernel image incl. the shared `.user_text`)
+  are additionally split into 4-KiB pages on both architectures
+  (`FINE_BLOCKS = 8`); everything above uses coarse blocks.
 
 ### C) MMU on, per-process VSpaces (classic, like seL4)
 - **+** Real hardware isolation, can also lock in unsafe native processes.

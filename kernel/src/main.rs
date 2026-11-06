@@ -272,8 +272,9 @@ pub extern "C" fn kernel_main(dtb_addr: u64) -> ! {
     println!("dtb     : {}", if dtb_ok { "ALL PASS" } else { "FAILURES" });
 
     // Phase 2/3: capability-basiertes Speichermodell + Capability-Space.
-    // User-RAM erst ab 2 MiB: die ersten 2 MiB sind die geteilte Kernel-L3 (von
-    // jeder isolierten VSpace genutzt) und dürfen kein EL0-zugängliches RAM enthalten.
+    // User-RAM erst ab 16 MiB: die ersten 16 MiB sind die geteilten Kernel-L3-
+    // Tabellen (von jeder isolierten VSpace genutzt) und dürfen kein EL0-zugängliches
+    // RAM enthalten.
     let free_base = hal::mmu::kernel_end().max(hal::mmu::USER_RAM_MIN);
     // ext-26: das oberste RAM-Fenster [MOD_BASE, ram_end) ist für das extern geladene Boot-Archiv
     // reserviert (QEMU `-device loader`); der Allokator bekommt es NICHT -> kein Konflikt.

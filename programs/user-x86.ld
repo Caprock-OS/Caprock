@@ -6,7 +6,7 @@
  * Auf x86 hat eine isolierte VSpace **ihr eigenes** Page Directory nur für GiB 0; GiB 1..3 teilen
  * sich alle isolierten Adressräume statisch (`ISO_PD_HIGH`, ohne `US`). `vspace_map_page_at`
  * weist deshalb jede VA ab, die nicht in `[16 MiB, 1 GiB)` liegt. Die aarch64-Adresse
- * 0x4100_0000 liegt dort in GiB 1 — auf x86 wäre sie knapp **über** dem Fenster und ließe sich
+ * 0x6000_0000 liegt dort in GiB 1 — auf x86 wäre sie knapp **über** dem Fenster und ließe sich
  * nicht mappen. Also 0x2000_0000 (512 MiB): weit über dem Kernel-Image, weit unter der Grenze,
  * und mit reichlich Abstand zum Stack-Fenster (`LOADED_STACK_VA`, s. kernel/src/system.rs).
  *

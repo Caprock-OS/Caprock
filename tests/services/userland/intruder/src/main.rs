@@ -21,7 +21,7 @@ pub const PRE_BADGE: u64 = 0x494E_5452;
 const REPORT: u64 = 0; // Slot 0: Report-Notification (WRITE-only, Badge PRE_BADGE)
 
 /// Beginn des physischen RAM — dort liegt das **Kernel-Image**. In der isolierten EL0-VSpace dieses
-/// Dienstes **nicht** gemappt (die VSpace bildet nur die eigenen Segmente ab 0x4100_0000 + Stack
+/// Dienstes **nicht** gemappt (die VSpace bildet nur die eigenen Segmente ab 0x6000_0000 + Stack
 /// ab) → jeder Lesezugriff faultet.
 const KERNEL_RAM: usize = 0x4000_0000;
 

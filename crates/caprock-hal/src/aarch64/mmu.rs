@@ -12,8 +12,8 @@
 //!  L1[1]      1..2 GiB   -> L2  (enthält das Kernelimage; feinere Rechte)
 //!  L1[2..=8]  2..9 GiB   Normal WB cacheable, RW + XN   (freies RAM)
 //!
-//!  L2[0]      +0..2 MiB  -> L3  (Kernel-Sektionen, 4-KiB-Seiten)
-//!  L2[1..]    +2 MiB..   Normal WB cacheable, RW + XN   (freies RAM in GiB 1)
+//!  L2[0..8]   +0..16 MiB -> L3  (Kernel-Sektionen, 4-KiB-Seiten)
+//!  L2[8..]    +16 MiB..   Normal WB cacheable, RW + XN   (freies RAM in GiB 1)
 //!
 //!  L3[i]      4-KiB-Seite: .text = R-X, .rodata = R--, sonst RW + XN
 //! ```
@@ -47,7 +47,8 @@ unsafe impl Sync for TableStore {}
 
 static L1_TABLE: TableStore = TableStore(UnsafeCell::new(PageTable([0; 512])));
 static L2_TABLE: TableStore = TableStore(UnsafeCell::new(PageTable([0; 512])));
-static L3_TABLE: TableStore = TableStore(UnsafeCell::new(PageTable([0; 512])));
+static L3_TABLES: [TableStore; FINE_BLOCKS] =
+    [const { TableStore(UnsafeCell::new(PageTable([0; 512]))) }; FINE_BLOCKS];
 
 // --- Deskriptor-Bits (ARMv8-A, Stage-1) ---
 const TABLE_DESC: u64 = 0b11; // Tabellen-Deskriptor (zeigt auf nächste Ebene)
@@ -70,6 +71,10 @@ const PAGE: u64 = 4096;
 const TWO_MIB: u64 = 2 * 1024 * 1024;
 const ONE_GIB: u64 = 1 << 30;
 const RAM_BASE: u64 = 0x4000_0000;
+/// Anzahl der 2-MiB-Blöcke im feingranularen W^X-Fenster am RAM-Anfang
+/// (`FINE_BLOCKS × 2 MiB = 16 MiB`, wie auf x86). Diese Region wird 4-KiB-
+/// seitenweise gemappt (Kernelimage + `.user_text`) — alles darüber ist grobkörnig.
+const FINE_BLOCKS: usize = 8;
 /// Ausgabe-Adressbits eines Tabellen-/Seiten-Deskriptors (Bits 47:12).
 const ADDR_MASK: u64 = 0x0000_ffff_ffff_f000;
 
@@ -151,10 +156,10 @@ fn perm_for_page(addr: u64) -> Perm {
     } else if addr >= us && addr < ue {
         Perm::UserRx // EL0-ausführbarer User-Code (global, von allen VSpaces geteilt)
     } else if addr >= ke {
-        // Freies RAM in den ersten 2 MiB: **EL1-only**. Diese L3 wird von jeder
-        // isolierten VSpace geteilt (Kernelimage + .user_text); sie darf daher kein
-        // EL0-zugängliches freies RAM enthalten. User-RAM wird erst ab 2 MiB
-        // alloziert (siehe init_mem-Aufrunden).
+        // Freies RAM im feingranularen W^X-Fenster (erste 16 MiB): **EL1-only**.
+        // Diese L3-Tabellen werden von jeder isolierten VSpace geteilt (Kernelimage +
+        // .user_text); sie dürfen daher kein EL0-zugängliches freies RAM enthalten.
+        // User-RAM wird erst ab FINE_BLOCKS × 2 MiB alloziert (siehe init_mem-Aufrunden).
         Perm::Rw
     } else {
         // Kernel-Daten/BSS/Stacks (EL1-only).
@@ -173,18 +178,21 @@ fn table_phys(store: &TableStore) -> u64 {
 
 /// Identity-Map mit W^X in die statischen Tabellen schreiben (nur Primärkern).
 fn build_tables() {
-    // L3: erste 2 MiB des RAM (Kernelimage) seitenweise mit Sektionsrechten.
-    let l3 = table_mut(&L3_TABLE);
-    for (i, entry) in l3.iter_mut().enumerate() {
-        let addr = RAM_BASE + i as u64 * PAGE;
-        *entry = normal_leaf(addr, perm_for_page(addr), true);
+    // L3: die ersten FINE_BLOCKS × 2 MiB des RAM (Kernelimage + `.user_text`)
+    // seitenweise mit Sektionsrechten (W^X bei 4-KiB-Granularität).
+    let l2 = table_mut(&L2_TABLE);
+    for b in 0..FINE_BLOCKS {
+        let l3 = table_mut(&L3_TABLES[b]);
+        for (i, entry) in l3.iter_mut().enumerate() {
+            let addr = RAM_BASE + (b as u64 * TWO_MIB) + i as u64 * PAGE;
+            *entry = normal_leaf(addr, perm_for_page(addr), true);
+        }
+        l2[b] = table_desc(table_phys(&L3_TABLES[b]));
     }
 
-    // L2: [0] -> L3 ; [1..] = restliches GiB 1 als 2-MiB-Blöcke, EL0-zugänglich
-    // (freies RAM für User-Stacks/-Daten).
-    let l2 = table_mut(&L2_TABLE);
-    l2[0] = table_desc(table_phys(&L3_TABLE));
-    for (i, entry) in l2.iter_mut().enumerate().skip(1) {
+    // L2: [0..FINE_BLOCKS] -> L3 ; [FINE_BLOCKS..] = restliches GiB 1 als
+    // 2-MiB-Blöcke, EL0-zugänglich (freies RAM für User-Stacks/-Daten).
+    for (i, entry) in l2.iter_mut().enumerate().skip(FINE_BLOCKS) {
         let addr = RAM_BASE + i as u64 * TWO_MIB;
         *entry = normal_leaf(addr, Perm::UserRw, false);
     }
@@ -197,12 +205,13 @@ fn build_tables() {
         l1[i as usize] = normal_leaf(i * ONE_GIB, Perm::UserRw, false);
     }
 
-    // Sicherheitsnetz: das Kernelimage muss in die ersten 2 MiB passen, sonst
-    // läge Code in einem nur-RW-Block (nicht ausführbar). Bisher ~1 MiB.
+    // Sicherheitsnetz: das Kernelimage muss in das feingranulare W^X-Fenster
+    // (FINE_BLOCKS × 2 MiB) passen, sonst läge Code in einem nur-RW-Block
+    // (nicht ausführbar). Heute ca. 1.6 MiB.
     // SAFETY: reine Adressberechnung.
     let kernel_end = unsafe { sym(&__kernel_end) };
-    if kernel_end > RAM_BASE + TWO_MIB {
-        super::console::emit_raw("[mmu] WARNUNG: Kernelimage > 2 MiB, W^X-Mapping unvollständig!\n");
+    if kernel_end > RAM_BASE + FINE_BLOCKS as u64 * TWO_MIB {
+        super::console::emit_raw("[mmu] WARNUNG: Kernelimage > 16 MiB, W^X-Mapping unvollständig!\n");
     }
 }
 
@@ -317,10 +326,10 @@ pub fn kernel_end() -> u64 {
     unsafe { sym(&__kernel_end) }
 }
 
-/// Mindest-Basis für **User**-RAM: 2 MiB ab RAM-Anfang. Die ersten 2 MiB sind die
-/// geteilte Kernel-L3 (Kernelimage + `.user_text`, von jeder VSpace genutzt) und
-/// enthalten kein EL0-zugängliches freies RAM. Der Allokator beginnt hier.
-pub const USER_RAM_MIN: u64 = RAM_BASE + TWO_MIB;
+/// Mindest-Basis für **User**-RAM: 16 MiB ab RAM-Anfang. Die ersten 16 MiB sind
+/// die geteilten Kernel-L3-Tabellen (Kernelimage + `.user_text`, von jeder VSpace
+/// genutzt) und enthalten kein EL0-zugängliches freies RAM. Der Allokator beginnt hier.
+pub const USER_RAM_MIN: u64 = RAM_BASE + FINE_BLOCKS as u64 * TWO_MIB;
 
 /// Ende von GiB 1 (RAM-Anfang + 1 GiB). Die private User-Region einer isolierten
 /// VSpace muss in `[USER_RAM_MIN, GIB1_END)` liegen (die per-PD-L2 deckt GiB 1 ab).
@@ -533,10 +542,11 @@ pub fn vspace_create_base(
     let l1 = unsafe { core::slice::from_raw_parts_mut(l1_phys as *mut u64, 512) };
     let l2 = unsafe { core::slice::from_raw_parts_mut(l2_phys as *mut u64, 512) };
 
-    // L2 (GiB 1): [0] -> gemeinsame Kernel-L3; alles andere EL1-only (kein EL0).
+    // L2 (GiB 1): [0..FINE_BLOCKS] -> gemeinsame Kernel-L3-Tabellen; alles andere
+    // EL1-only (kein EL0).
     for (i, e) in l2.iter_mut().enumerate() {
-        *e = if i == 0 {
-            table_desc(table_phys(&L3_TABLE))
+        *e = if i < FINE_BLOCKS {
+            table_desc(table_phys(&L3_TABLES[i]))
         } else {
             kernel_block(RAM_BASE + i as u64 * TWO_MIB)
         };
@@ -928,12 +938,13 @@ pub fn dma_cache_invalidate(va: u64, len: u64) {
 }
 
 /// Alle **per-PD-L3-Tabellen** dieser VSpace einsammeln (für den Teardown): ruft
-/// `free_l3(l3_phys)` für jeden L2-Eintrag, der auf eine L3 zeigt — außer Index 0
-/// (die geteilte Kernel-L3). Danach gibt der Aufrufer L2 + L1 frei.
+/// `free_l3(l3_phys)` für jeden L2-Eintrag, der auf eine L3 zeigt — außer die
+/// Indizes `0..FINE_BLOCKS` (die geteilten Kernel-L3-Tabellen). Danach gibt der
+/// Aufrufer L2 + L1 frei.
 pub fn vspace_collect_l3s(l2_phys: u64, free_l3: &mut dyn FnMut(u64)) {
     // SAFETY: gültige L2-Tabelle (read-only Scan).
     let l2 = unsafe { core::slice::from_raw_parts(l2_phys as *const u64, 512) };
-    for &e in l2.iter().skip(1) {
+    for &e in l2.iter().skip(FINE_BLOCKS) {
         if e & 0b11 == TABLE_DESC {
             free_l3(e & ADDR_MASK);
         }

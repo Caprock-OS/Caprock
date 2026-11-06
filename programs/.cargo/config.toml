@@ -16,7 +16,7 @@ build-std-features = ["compiler-builtins-mem"]
 [target.aarch64-caprock-user]
 rustflags = [
     # Eigenes Linker-Skript (relativ zum programs/-Verzeichnis, aus dem `cargo build` läuft):
-    # festgelinkt an 0x4100_0000, getrennte W^X-PT_LOAD-Segmente.
+    # festgelinkt an 0x6000_0000, getrennte W^X-PT_LOAD-Segmente.
     "-C", "link-arg=-Tuser.ld",
     # 4-KiB-Seiten (statt 64-KiB-Default): kompakte Datei + 4-KiB-ausgerichtete PT_LOAD-Segmente,
     # passend zur 4-KiB-Mapping-Granularität des Loaders.

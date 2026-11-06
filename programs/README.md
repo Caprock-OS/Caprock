@@ -12,7 +12,7 @@ cd programs && cargo build --release
 
 Erzeugt die ELFs unter `programs/build/target/aarch64-caprock-user/release/<name>.elf`. Eigene
 Target-Spec (`aarch64-caprock-user.json`) + Linker-Skript (`user.ld`, festgelinkt an VA
-`0x4100_0000`, getrennte **W^X**-`PT_LOAD`-Segmente) via `.cargo/config.toml`.
+`0x6000_0000`, getrennte **W^X**-`PT_LOAD`-Segmente) via `.cargo/config.toml`.
 
 Die ELFs werden anschließend mit `tools/mkarchive.py` (im Repo-Root) in ein Boot-Archiv gelegt und
 von QEMU `-device loader` in das reservierte RAM-Fenster geladen (siehe `test-qemu.sh`).

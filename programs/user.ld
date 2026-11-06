@@ -1,6 +1,6 @@
 /* Linker-Skript für extern geladene Caprock-EL0-Programme (ext-26).
  *
- * ET_EXEC, an einer KANONISCHEN festen VA gelinkt (0x4100_0000, in GiB 1). Der Loader lädt das
+ * ET_EXEC, an einer KANONISCHEN festen VA gelinkt (0x6000_0000, in GiB 1). Der Loader lädt das
  * Programm an BELIEBIGE allokierte Physadressen und mappt seine PT_LOAD-Segmente per
  * vspace_map_page_at(va -> pa) in die isolierte VSpace (VA != PA, nur diese private VSpace).
  *
@@ -22,7 +22,7 @@ PHDRS {
 }
 
 SECTIONS {
-    . = 0x41000000;
+    . = 0x60000000;
 
     .text : ALIGN(4096) {
         *(.text._start)   /* Entry zuerst */

@@ -432,14 +432,14 @@ fn run_loaderfuzz() -> bool {
         b[6] = 1; // EI_VERSION
         b[16..18].copy_from_slice(&2u16.to_le_bytes()); // ET_EXEC
         b[18..20].copy_from_slice(&0xB7u16.to_le_bytes()); // EM_AARCH64
-        b[24..32].copy_from_slice(&0x4100_0000u64.to_le_bytes()); // e_entry
+        b[24..32].copy_from_slice(&0x6000_0000u64.to_le_bytes()); // e_entry
         b[32..40].copy_from_slice(&64u64.to_le_bytes()); // e_phoff
         b[54..56].copy_from_slice(&56u16.to_le_bytes()); // e_phentsize
         b[56..58].copy_from_slice(&1u16.to_le_bytes()); // e_phnum
         b[64..68].copy_from_slice(&1u32.to_le_bytes()); // p_type=PT_LOAD
         b[68..72].copy_from_slice(&5u32.to_le_bytes()); // p_flags=R+X
         b[72..80].copy_from_slice(&120u64.to_le_bytes()); // p_offset
-        b[80..88].copy_from_slice(&0x4100_0000u64.to_le_bytes()); // p_vaddr
+        b[80..88].copy_from_slice(&0x6000_0000u64.to_le_bytes()); // p_vaddr
         b[104..112].copy_from_slice(&0x1000u64.to_le_bytes()); // p_memsz (filesz=0)
     };
     // Jede Korruption macht den Parser ablehnen (validiertes Feld).

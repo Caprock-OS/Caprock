@@ -6194,13 +6194,13 @@ pub fn spawn_isolated_native_parked(code: *const u8, code_len: usize, prio: u8) 
 /// Stack wird **nicht-identity** an diese VA gemappt.
 ///
 /// Die Adresse ist architekturabhängig, weil das mappbare VA-Fenster einer isolierten VSpace es
-/// ist. Auf aarch64 liegt es in GiB 1 (Code bei `0x4100_0000`, Stack darüber). Auf x86 hat eine
+/// ist. Auf aarch64 liegt es in GiB 1 (Code bei `0x6000_0000`, Stack darüber). Auf x86 hat eine
 /// isolierte VSpace ihr eigenes Page Directory **nur für GiB 0**; GiB 1..3 teilen sich alle
 /// isolierten Adressräume statisch, und `vspace_map_page_at` weist deshalb jede VA ≥ 1 GiB ab.
 /// Der aarch64-Wert wäre dort schlicht nicht mappbar — der Ladepfad schlüge beim Stack fehl, und
 /// zwar erst nach dem Kopieren aller Segmente.
 #[cfg(target_arch = "aarch64")]
-const LOADED_STACK_VA: u64 = 0x43F0_0000;
+const LOADED_STACK_VA: u64 = 0x7FF0_0000;
 /// x86: knapp unter der 1-GiB-Grenze, weit über der Code-Link-VA `0x2000_0000` (`user-x86.ld`).
 #[cfg(not(target_arch = "aarch64"))]
 const LOADED_STACK_VA: u64 = 0x3FF0_0000;
